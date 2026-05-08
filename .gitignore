@@ -9,10 +9,10 @@ target/
 *.tsbuildinfo
 
 # Tauri
-src-tauri/target/
-src-tauri/gen/schemas/
-src-tauri/resources/pipelinekit-sidecar.cjs
-src-tauri/resources/pipelinekit-sidecar.cjs.map
+**/src-tauri/target/
+**/src-tauri/gen/schemas/
+**/src-tauri/resources/pipelinekit-sidecar.cjs
+**/src-tauri/resources/pipelinekit-sidecar.cjs.map
 
 # Environment / secrets
 .env
