@@ -51,10 +51,17 @@ fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let resource = app
+    let resource_raw = app
         .path()
         .resolve(SIDECAR_RESOURCE, tauri::path::BaseDirectory::Resource)
         .map_err(|e| format!("failed to resolve sidecar resource: {e}"))?;
+
+    // On Windows, Tauri's BaseDirectory::Resource returns an extended-length
+    // path with the `\\?\` prefix (e.g. `\\?\C:\Users\...`). Node v22+
+    // mishandles this when it's the main script argument and crashes with
+    // `EISDIR: illegal operation on a directory, lstat 'C:'`. dunce::simplified
+    // strips the prefix when safe (path < 260 chars and no UNC weirdness).
+    let resource: PathBuf = dunce::simplified(&resource_raw).to_path_buf();
 
     if !resource.exists() {
         let msg = format!(
