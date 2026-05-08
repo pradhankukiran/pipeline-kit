@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@pipelinekit/core": ["packages/core/src/index.ts"],
+      "@pipelinekit/assets": ["packages/assets/src/index.ts"],
+      "@pipelinekit/recipes": ["packages/recipes/src/index.ts"],
+      "@pipelinekit/sidecar": ["packages/sidecar/src/index.ts"]
+    },
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true
+  }
+}
