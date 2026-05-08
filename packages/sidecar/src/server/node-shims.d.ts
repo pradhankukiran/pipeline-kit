@@ -22,6 +22,18 @@ declare module "node:http" {
   ): Server;
 }
 
+declare module "node:net" {
+  export class Socket {
+    setTimeout(timeout: number, callback?: () => void): this;
+    on(event: "error", listener: (error: Error) => void): this;
+    on(event: "data", listener: (chunk: Uint8Array) => void): this;
+    on(event: "close", listener: () => void): this;
+    connect(port: number, host: string, callback?: () => void): this;
+    write(chunk: string, encoding?: "utf8"): boolean;
+    destroy(): this;
+  }
+}
+
 declare module "node:fs/promises" {
   export function readFile(path: string, encoding: "utf8"): Promise<string>;
   export function readFile(path: string): Promise<Uint8Array>;

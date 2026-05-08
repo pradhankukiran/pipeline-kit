@@ -527,8 +527,8 @@ function createInitialBlenderState(): BlenderConnectionState {
 }
 
 function createDefaultSettings(): SidecarSettings {
-  const defaultBlenderCommand = process.platform === "win32" ? "cmd" : "uvx";
-  const defaultBlenderArgs = process.platform === "win32" ? ["/c", "uvx", "blender-mcp"] : ["blender-mcp"];
+  const defaultBlenderCommand = process.platform === "win32" ? "blender-socket" : "uvx";
+  const defaultBlenderArgs = process.platform === "win32" ? [] : ["blender-mcp"];
 
   return {
     models: {

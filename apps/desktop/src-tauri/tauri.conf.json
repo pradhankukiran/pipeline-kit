@@ -4,8 +4,8 @@
   "version": "0.1.2",
   "identifier": "dev.pipelinekit.desktop",
   "build": {
-    "beforeDevCommand": "pnpm vite --host 127.0.0.1",
-    "beforeBuildCommand": "pnpm -w run prebuild:desktop",
+    "beforeDevCommand": "corepack pnpm vite --host 127.0.0.1",
+    "beforeBuildCommand": "corepack pnpm -w run prebuild:desktop",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
   },

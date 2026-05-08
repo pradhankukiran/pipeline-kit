@@ -27,7 +27,6 @@ import {
 import {
   connectBlender,
   createProject,
-  getSamplePipeline,
   getRecentOperations,
   getSettings,
   getSidecarHealth,
@@ -225,19 +224,14 @@ export function App() {
     setLoading(true);
     setError(null);
 
-    const [healthResult, pipelineResult, settingsResult, operationsResult] = await Promise.all([
+    const [healthResult, settingsResult, operationsResult] = await Promise.all([
       getSidecarHealth(),
-      getSamplePipeline(),
       getSettings(),
       getRecentOperations()
     ]);
 
     if (healthResult.data) {
       setHealth(healthResult.data);
-    }
-
-    if (pipelineResult.data) {
-      setSnapshot((current) => mergeSnapshot(current, pipelineResult.data));
     }
 
     if (settingsResult.data) {
@@ -248,15 +242,11 @@ export function App() {
       setOperations(operationsResult.data);
     }
 
-    const nextError = healthResult.error && pipelineResult.error
-      ? `Sidecar unavailable at ${sidecarBaseUrl}`
-      : null;
+    const nextError = healthResult.error ? `Sidecar unavailable at ${sidecarBaseUrl}` : null;
 
     setError(nextError);
     setMessage(
-      pipelineResult.data
-        ? "Sample pipeline loaded from sidecar"
-        : healthResult.data?.message ?? "Using bundled fallback production data"
+      healthResult.data?.message ?? "Sidecar offline; local project list may be unavailable"
     );
     setLoading(false);
   }, []);

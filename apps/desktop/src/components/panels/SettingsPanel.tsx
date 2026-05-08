@@ -67,15 +67,15 @@ export function SettingsPanel({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl gap-0 p-0">
-        <DialogHeader className="border-b border-border px-6 py-4">
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b border-border px-6 py-4 pr-12">
           <DialogTitle className="text-base font-semibold tracking-tight">Settings</DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
             Local sidecar configuration
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 px-6 py-6">
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6">
           {/* Blender MCP */}
           <section className="space-y-3">
             <div>
@@ -91,7 +91,7 @@ export function SettingsPanel({
                   id="settings-blender-cmd"
                   value={settings.blenderMcpCommand}
                   onChange={(event) => onChange("blenderMcpCommand", event.target.value)}
-                  placeholder="uvx"
+                  placeholder="blender-socket"
                   spellCheck={false}
                   autoComplete="off"
                 />
@@ -102,12 +102,12 @@ export function SettingsPanel({
                   id="settings-blender-args"
                   value={settings.blenderMcpArgs}
                   onChange={(event) => onChange("blenderMcpArgs", event.target.value)}
-                  placeholder="blender-mcp"
+                  placeholder="Leave empty for the Windows Blender socket"
                   spellCheck={false}
                   autoComplete="off"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Comma-separated. Parsed into an array on save.
+                  Space-separated. Parsed into an array on save.
                 </p>
               </div>
               <label className="flex items-center justify-between gap-3 rounded-md border border-border bg-secondary/30 px-3 py-2">
@@ -246,7 +246,7 @@ export function SettingsPanel({
           </div>
         </div>
 
-        <DialogFooter className="border-t border-border px-6 py-4">
+        <DialogFooter className="shrink-0 items-center border-t border-border px-6 py-4">
           {savedFlash ? (
             <Badge variant="success" className="inline-flex items-center gap-1">
               <Check className="h-3 w-3 mr-1" aria-hidden />

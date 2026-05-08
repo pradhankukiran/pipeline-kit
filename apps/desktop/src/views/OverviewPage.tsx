@@ -12,25 +12,7 @@ import {
   shotsFromTuples
 } from "@/components/panels/ShotBoardPanel";
 import { Metric } from "@/components/layout/topbar-slots";
-import { Badge } from "@/components/ui/badge";
 import { useDashboard } from "@/dashboard-context";
-import type { Project } from "@/fallbackData";
-
-function statusPillVariant(
-  status: Project["status"]
-): "success" | "secondary" | "destructive" {
-  if (status === "Active") return "success";
-  if (status === "At Risk") return "destructive";
-  return "secondary";
-}
-
-function StatusPill({ status }: { status: Project["status"] }) {
-  return (
-    <Badge variant={statusPillVariant(status)} className="justify-self-start">
-      {status}
-    </Badge>
-  );
-}
 
 function SectionHeader({
   eyebrow,
@@ -83,6 +65,7 @@ export function OverviewPage() {
   const ctx = useDashboard();
   const {
     snapshot,
+    projects,
     activeProjectId,
     blenderSession,
     tools,
@@ -128,40 +111,41 @@ export function OverviewPage() {
         >
           <SectionHeader
             eyebrow="PROJECTS"
-            title="Project portfolio"
-            description="Live status across the active slate."
+            title="Projects"
+            description="Projects stored in the local sidecar."
           />
-          <ul className="space-y-2">
-            {snapshot.projects.map((project) => (
-              <li key={`${project.name}-${project.client}`}>
-                <article className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-md border border-border bg-white px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">
-                      {project.name}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {project.client} · Due {project.due} · {project.shots}
-                    </p>
-                  </div>
-                  <StatusPill status={project.status} />
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="h-1.5 w-24 overflow-hidden rounded-full bg-secondary"
-                      aria-hidden
-                    >
-                      <div
-                        className="h-full rounded-full bg-emerald-500"
-                        style={{ width: `${project.progress}%` }}
-                      />
+          {projects.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border bg-white px-4 py-8 text-center">
+              <p className="text-sm font-medium text-foreground">No projects yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Create a project from the home screen to start a pipeline.
+              </p>
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {projects.map((project) => (
+                <li key={project.id}>
+                  <article className="rounded-md border border-border bg-white px-3 py-2">
+                    <div className="flex min-w-0 items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {project.name}
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          Updated {new Date(project.updatedAt).toLocaleString()}
+                        </p>
+                      </div>
+                      {project.id === activeProjectId ? (
+                        <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                          Active
+                        </span>
+                      ) : null}
                     </div>
-                    <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">
-                      {project.progress}%
-                    </span>
-                  </div>
-                </article>
-              </li>
-            ))}
-          </ul>
+                  </article>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <BriefPanel items={snapshot.brief} className="mb-6 break-inside-avoid" />

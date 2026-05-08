@@ -4,6 +4,7 @@
 // and connection would fail with a cryptic "module not found" message.
 import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport as McpSdkStdioTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Socket } from "node:net";
 
 export interface BlenderMcpCommand {
   readonly name: string;
@@ -133,6 +134,213 @@ export class SdkBlenderMcpClient implements BlenderMcpClient {
 export class PlaceholderBlenderMcpClient extends SdkBlenderMcpClient {}
 
 export function createBlenderMcpClient(options: BlenderMcpClientOptions): BlenderMcpClient {
+  if (shouldUseDirectSocket(options)) {
+    return new DirectBlenderSocketClient({
+      host: process.env["PIPELINEKIT_BLENDER_SOCKET_HOST"] ?? "127.0.0.1",
+      port: readPort(process.env["PIPELINEKIT_BLENDER_SOCKET_PORT"], 9876),
+      timeoutMs: readPort(process.env["PIPELINEKIT_BLENDER_SOCKET_TIMEOUT_MS"], 5000)
+    });
+  }
+
   return new SdkBlenderMcpClient(options);
 }
 
+interface DirectBlenderSocketClientOptions {
+  readonly host: string;
+  readonly port: number;
+  readonly timeoutMs: number;
+}
+
+class DirectBlenderSocketClient implements BlenderMcpClient {
+  private readonly options: DirectBlenderSocketClientOptions;
+  private connected = false;
+
+  constructor(options: DirectBlenderSocketClientOptions) {
+    this.options = options;
+  }
+
+  async connect(): Promise<void> {
+    await this.execute("print('PipelineKit Blender socket connection check')");
+    this.connected = true;
+  }
+
+  async listTools(): Promise<unknown> {
+    await this.connect();
+    return {
+      tools: [
+        {
+          name: "execute_blender_code",
+          description: "Execute Python code in Blender via the local Blender socket add-on."
+        },
+        {
+          name: "get_scene_info",
+          description: "Read basic scene information from Blender."
+        }
+      ]
+    };
+  }
+
+  async call(command: BlenderMcpCommand): Promise<BlenderMcpResult> {
+    const code = command.name === "get_scene_info" ? sceneInfoScript() : readCodeArgument(command);
+    const output = await this.execute(code);
+    this.connected = true;
+
+    return {
+      command: command.name,
+      output: toMcpLikeOutput(output)
+    };
+  }
+
+  async close(): Promise<void> {
+    this.connected = false;
+  }
+
+  private execute(code: string): Promise<DirectBlenderResponse> {
+    return new Promise((resolve, reject) => {
+      const socket = new Socket();
+      const chunks: Uint8Array[] = [];
+      let settled = false;
+
+      const finish = (error?: Error, response?: DirectBlenderResponse) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        socket.destroy();
+        if (error) {
+          reject(error);
+        } else {
+          resolve(response ?? { status: "ok" });
+        }
+      };
+
+      socket.setTimeout(this.options.timeoutMs, () => {
+        finish(
+          new Error(
+            `Blender socket timed out after ${this.options.timeoutMs}ms at ${this.options.host}:${this.options.port}.`
+          )
+        );
+      });
+      socket.on("error", (error) => finish(error));
+      socket.on("data", (chunk) => {
+        chunks.push(chunk);
+        if (chunk.includes(0)) {
+          finish(undefined, parseDirectResponse(Buffer.concat(chunks)));
+        }
+      });
+      socket.on("close", () => {
+        if (!settled && chunks.length > 0) {
+          finish(undefined, parseDirectResponse(Buffer.concat(chunks)));
+        }
+      });
+      socket.connect(this.options.port, this.options.host, () => {
+        const request = JSON.stringify({
+          type: "execute",
+          code,
+          strict_json: false
+        });
+        socket.write(`${request}\0`, "utf8");
+      });
+    });
+  }
+}
+
+interface DirectBlenderResponse {
+  readonly status: string;
+  readonly result?: unknown;
+  readonly message?: string;
+  readonly stdout?: string;
+  readonly stderr?: string;
+}
+
+function parseDirectResponse(buffer: { toString(encoding: "utf8"): string }): DirectBlenderResponse {
+  const raw = buffer.toString("utf8").replace(/\0+$/g, "").trim();
+  if (!raw) {
+    throw new Error("Blender socket returned an empty response.");
+  }
+
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error("Blender socket returned a non-object response.");
+  }
+
+  const status = typeof parsed["status"] === "string" ? parsed["status"] : "ok";
+  const response: DirectBlenderResponse = {
+    status,
+    result: parsed["result"],
+    message: typeof parsed["message"] === "string" ? parsed["message"] : undefined,
+    stdout: typeof parsed["stdout"] === "string" ? parsed["stdout"] : undefined,
+    stderr: typeof parsed["stderr"] === "string" ? parsed["stderr"] : undefined
+  };
+
+  if (response.status === "error") {
+    throw new Error(response.message ?? response.stderr ?? "Blender socket reported an error.");
+  }
+
+  return response;
+}
+
+function toMcpLikeOutput(response: DirectBlenderResponse): Record<string, unknown> {
+  const text = [response.stdout, response.stderr].filter(Boolean).join("\n").trim();
+  return {
+    content: text ? [{ type: "text", text }] : [],
+    structuredContent: {
+      result: text,
+      blender: response.result ?? null
+    },
+    raw: response
+  };
+}
+
+function readCodeArgument(command: BlenderMcpCommand): string {
+  const args = command.arguments ?? {};
+  const code = args["code"] ?? args["python"] ?? args["script"];
+  if (typeof code !== "string" || code.trim().length === 0) {
+    throw new Error(`Blender command ${command.name} requires a non-empty code argument.`);
+  }
+
+  return code;
+}
+
+function sceneInfoScript(): string {
+  return `import bpy
+import json
+
+report = {
+    "scene": bpy.context.scene.name,
+    "objects": [{"name": o.name, "type": o.type} for o in bpy.context.scene.objects],
+    "materials": sorted([m.name for m in bpy.data.materials]),
+    "renderSettings": {
+        "engine": bpy.context.scene.render.engine,
+        "resolution": [bpy.context.scene.render.resolution_x, bpy.context.scene.render.resolution_y],
+        "camera": bpy.context.scene.camera.name if bpy.context.scene.camera else None,
+    },
+}
+print(json.dumps({"status": "ok", "report": report}, sort_keys=True))
+`;
+}
+
+function shouldUseDirectSocket(options: BlenderMcpClientOptions): boolean {
+  if (process.env["PIPELINEKIT_BLENDER_MCP_FORCE_STDIO"] === "1") {
+    return false;
+  }
+
+  if (options.command === "blender-socket") {
+    return true;
+  }
+
+  return process.platform === "win32";
+}
+
+function readPort(raw: string | undefined, fallback: number): number {
+  if (!raw) {
+    return fallback;
+  }
+
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

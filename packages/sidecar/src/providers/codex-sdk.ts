@@ -1,6 +1,4 @@
 import type { ModelProvider, ModelRequest, ModelResponse } from "./types.js";
-// Static import so esbuild bundles the Codex SDK into the sidecar.
-import { Codex as CodexSdk } from "@openai/codex-sdk";
 
 export interface CodexSdkProviderOptions {
   readonly model?: string;
@@ -59,6 +57,7 @@ export class CodexSdkProvider implements ModelProvider {
     const model = request.model ?? this.model;
     const metadata = request.metadata ?? {};
     const workingDirectory = getStringMetadata(metadata, "workingDirectory") ?? this.workingDirectory;
+    const { Codex: CodexSdk } = await loadCodexSdk();
     const codex = new CodexSdk({
       apiKey: getStringMetadata(metadata, "apiKey") ?? this.apiKey,
       baseUrl: getStringMetadata(metadata, "baseUrl") ?? this.baseUrl,
@@ -96,6 +95,22 @@ export class CodexSdkProvider implements ModelProvider {
     return this.model;
   }
 }
+
+let codexSdkModulePromise: Promise<CodexSdkModule> | undefined;
+
+async function loadCodexSdk(): Promise<Required<Pick<CodexSdkModule, "Codex">>> {
+  codexSdkModulePromise ??= importRuntime("@openai/codex-sdk");
+  const mod = await codexSdkModulePromise;
+  if (typeof mod.Codex !== "function") {
+    throw new Error("@openai/codex-sdk did not export Codex.");
+  }
+  return { Codex: mod.Codex };
+}
+
+const importRuntime = new Function(
+  "specifier",
+  "return import(specifier)"
+) as (specifier: string) => Promise<CodexSdkModule>;
 
 const jsonObjectOutputSchema = {
   type: "object",
