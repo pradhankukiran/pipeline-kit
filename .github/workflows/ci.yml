@@ -30,11 +30,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck workspace
-        run: pnpm -r typecheck
-
-      - name: Build libraries
+      - name: Build libraries (typechecks them implicitly via tsc emit)
         run: pnpm --filter @pipelinekit/core --filter @pipelinekit/recipes --filter @pipelinekit/assets --filter @pipelinekit/sidecar -r build
+
+      - name: Typecheck desktop
+        run: pnpm --filter @pipelinekit/desktop run typecheck
 
       - name: Bundle sidecar (esbuild)
         run: pnpm --filter @pipelinekit/sidecar run bundle
@@ -81,6 +81,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build libraries (so esbuild can resolve workspace deps)
+        run: pnpm --filter @pipelinekit/core --filter @pipelinekit/recipes --filter @pipelinekit/assets --filter @pipelinekit/sidecar -r build
 
       - name: Bundle sidecar (Tauri build script validates the resource exists)
         run: pnpm --filter @pipelinekit/sidecar run bundle
