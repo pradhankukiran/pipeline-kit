@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "pnpm --filter @pipelinekit/desktop dev",
     "build": "pnpm -r build",
-    "prebuild:desktop": "pnpm --filter @pipelinekit/sidecar run bundle && pnpm --filter @pipelinekit/desktop exec vite build",
+    "prebuild:desktop": "pnpm --filter @pipelinekit/core --filter @pipelinekit/recipes --filter @pipelinekit/assets -r build && pnpm --filter @pipelinekit/sidecar run bundle && pnpm --filter @pipelinekit/desktop exec vite build",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
