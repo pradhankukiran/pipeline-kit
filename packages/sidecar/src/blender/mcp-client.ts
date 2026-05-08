@@ -1,3 +1,10 @@
+// Static imports so esbuild bundles the SDK into pipelinekit-sidecar.cjs.
+// Previously these were dynamic `import()` calls with a runtime string, which
+// esbuild can't statically resolve — the bundle would ship without the SDK
+// and connection would fail with a cryptic "module not found" message.
+import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport as McpSdkStdioTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
 export interface BlenderMcpCommand {
   readonly name: string;
   readonly arguments?: Record<string, unknown>;
@@ -72,19 +79,14 @@ export class SdkBlenderMcpClient implements BlenderMcpClient {
       return;
     }
 
-    const [{ Client }, { StdioClientTransport }] = await Promise.all([
-      loadMcpClientModule(),
-      loadMcpStdioModule()
-    ]);
-
-    const client = new Client(
+    const client = new McpSdkClient(
       { name: "pipelinekit-sidecar", version: "0.1.0" },
       { capabilities: {} }
-    );
-    const transport = new StdioClientTransport({
+    ) as unknown as McpClient;
+    const transport = new McpSdkStdioTransport({
       command: this.options.command,
-      args: this.options.args
-    });
+      args: this.options.args ? [...this.options.args] : undefined
+    }) as unknown as McpTransport;
 
     await client.connect(transport);
     this.client = client;
@@ -134,48 +136,3 @@ export function createBlenderMcpClient(options: BlenderMcpClientOptions): Blende
   return new SdkBlenderMcpClient(options);
 }
 
-async function loadMcpClientModule(): Promise<Required<Pick<McpClientModule, "Client">>> {
-  const moduleName = "@modelcontextprotocol/sdk/client/index.js";
-  try {
-    const module = (await import(moduleName)) as McpClientModule;
-    if (typeof module.Client !== "function") {
-      throw new Error(`${moduleName} does not export Client.`);
-    }
-
-    return { Client: module.Client };
-  } catch (error) {
-    if (isModuleNotFound(error)) {
-      throw new Error(
-        "@modelcontextprotocol/sdk is required for Blender MCP integration. Install it in @pipelinekit/sidecar before creating a Blender MCP client."
-      );
-    }
-
-    throw error;
-  }
-}
-
-async function loadMcpStdioModule(): Promise<
-  Required<Pick<McpStdioModule, "StdioClientTransport">>
-> {
-  const moduleName = "@modelcontextprotocol/sdk/client/stdio.js";
-  try {
-    const module = (await import(moduleName)) as McpStdioModule;
-    if (typeof module.StdioClientTransport !== "function") {
-      throw new Error(`${moduleName} does not export StdioClientTransport.`);
-    }
-
-    return { StdioClientTransport: module.StdioClientTransport };
-  } catch (error) {
-    if (isModuleNotFound(error)) {
-      throw new Error(
-        "@modelcontextprotocol/sdk is required for Blender MCP stdio transport. Install it in @pipelinekit/sidecar before creating a Blender MCP client."
-      );
-    }
-
-    throw error;
-  }
-}
-
-function isModuleNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND";
-}
