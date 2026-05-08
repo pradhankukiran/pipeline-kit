@@ -1,0 +1,11 @@
+/*
+ * Legacy panel-internal styles preserved during the design-system migration.
+ * Phase 1 set up Tailwind + shadcn; Phase 2 migrated all 10 panels to the new
+ * primitives; the polish pass trimmed every legacy rule that was no longer
+ * referenced by App.tsx, AppShell.tsx, or any panel component.
+ *
+ * This file is intentionally kept (and still imported from main.tsx) as a
+ * landing pad for any temporary legacy bits that surface during follow-up
+ * work. Do not add new rules here — write Tailwind classes inline or extend
+ * `styles.css` instead.
+ */
