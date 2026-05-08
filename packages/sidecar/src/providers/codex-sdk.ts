@@ -1,4 +1,6 @@
 import type { ModelProvider, ModelRequest, ModelResponse } from "./types.js";
+// Static import so esbuild bundles the Codex SDK into the sidecar.
+import { Codex as CodexSdk } from "@openai/codex-sdk";
 
 export interface CodexSdkProviderOptions {
   readonly model?: string;
@@ -56,13 +58,12 @@ export class CodexSdkProvider implements ModelProvider {
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const model = request.model ?? this.model;
     const metadata = request.metadata ?? {};
-    const { Codex } = await loadCodexSdk();
     const workingDirectory = getStringMetadata(metadata, "workingDirectory") ?? this.workingDirectory;
-    const codex = new Codex({
+    const codex = new CodexSdk({
       apiKey: getStringMetadata(metadata, "apiKey") ?? this.apiKey,
       baseUrl: getStringMetadata(metadata, "baseUrl") ?? this.baseUrl,
       env: this.env
-    });
+    }) as unknown as CodexClient;
 
     const thread = codex.startThread({
       workingDirectory,
@@ -100,27 +101,6 @@ const jsonObjectOutputSchema = {
   type: "object",
   additionalProperties: true
 } as const;
-
-async function loadCodexSdk(): Promise<Required<Pick<CodexSdkModule, "Codex">>> {
-  const moduleName = "@openai/codex-sdk";
-
-  try {
-    const module = (await import(moduleName)) as CodexSdkModule;
-    if (typeof module.Codex !== "function") {
-      throw new Error("@openai/codex-sdk does not export Codex.");
-    }
-
-    return { Codex: module.Codex };
-  } catch (error) {
-    if (isModuleNotFound(error)) {
-      throw new Error(
-        "@openai/codex-sdk is required for CodexSdkProvider. Install it in @pipelinekit/sidecar before using the codex lane."
-      );
-    }
-
-    throw error;
-  }
-}
 
 function formatCodexPrompt(request: ModelRequest): string {
   return request.messages
@@ -169,8 +149,4 @@ function getStringMetadata(metadata: Record<string, unknown>, key: string): stri
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function isModuleNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND";
 }
