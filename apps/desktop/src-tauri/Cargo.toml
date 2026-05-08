@@ -1,6 +1,6 @@
 [package]
 name = "pipelinekit-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "PipelineKit desktop shell"
 authors = ["PipelineKit"]
 edition = "2021"
@@ -18,3 +18,4 @@ tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-window-state = "2"
 dirs = "6"
+dunce = "1"
