@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+dist-bundle/
+dist-ssr/
+target/
+*.tsbuildinfo
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/resources/pipelinekit-sidecar.cjs
+src-tauri/resources/pipelinekit-sidecar.cjs.map
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs
+*.log
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Persistence / runtime artifacts
+*.db
+*.db-shm
+*.db-wal
+.pipelinekit/
+
+# Coverage / test
+coverage/
+.nyc_output/
+
+# OS
+Thumbs.db
