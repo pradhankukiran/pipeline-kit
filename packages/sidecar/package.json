@@ -1,0 +1,38 @@
+{
+  "name": "@pipelinekit/sidecar",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Node.js sidecar adapters and pipeline runner for PipelineKit.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "bundle": "node scripts/bundle.mjs",
+    "dev": "tsx src/server/dev-server.ts",
+    "start": "node dist/sidecar/src/server/dev-server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@openai/codex-sdk": "^0.129.0",
+    "@pipelinekit/assets": "workspace:*",
+    "@pipelinekit/core": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.7",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
