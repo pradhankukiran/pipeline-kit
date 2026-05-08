@@ -1,0 +1,24 @@
+{
+  "identifier": "default",
+  "description": "Default desktop window permissions",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "node",
+          "cmd": "node",
+          "args": [{ "validator": ".+" }]
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-kill",
+      "allow": [{ "name": "node" }]
+    },
+    "window-state:default"
+  ]
+}
