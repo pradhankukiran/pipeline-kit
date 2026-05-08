@@ -1,7 +1,7 @@
 {
   "name": "pipelinekit",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A local AI production pipeline for Blender.",
   "type": "module",
   "scripts": {
