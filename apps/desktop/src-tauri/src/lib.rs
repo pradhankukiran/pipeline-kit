@@ -161,11 +161,24 @@ fn kill_sidecar(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .on_menu_event(menu::handle_menu_event)
+        .on_menu_event(menu::handle_menu_event);
+
+    // On macOS, clicking the red traffic light should hide the window
+    // (not quit the app), matching native AppKit conventions. Cmd+Q
+    // still quits because PredefinedMenuItem::quit handles it natively.
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = window.hide();
+        }
+    });
+
+    builder
         .setup(|app| {
             if let Err(err) = menu::build_and_install(&app.handle()) {
                 eprintln!("[pipelinekit] failed to install application menu: {err}");
@@ -179,9 +192,20 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build PipelineKit desktop app")
-        .run(|app, event| {
-            if let RunEvent::ExitRequested { .. } = event {
+        .run(|app, event| match event {
+            RunEvent::ExitRequested { .. } => {
                 kill_sidecar(app);
             }
+            // macOS dock-click reopen: when the user activates the app
+            // via the dock and we have no visible windows (because the
+            // close button hid them), bring the main window back.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { has_visible_windows, .. } if !has_visible_windows => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            _ => {}
         });
 }
