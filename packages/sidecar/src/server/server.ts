@@ -25,11 +25,13 @@ import {
   deleteProject,
   loadInitialState,
   recordOperation,
+  recordPipelineRun,
   setActiveProject,
   updateProject,
   updateSettings,
   type JsonOperation,
   type PipelineRunRecord,
+  type RecentOperation,
   type SidecarState
 } from "./state.js";
 
@@ -491,6 +493,33 @@ export async function createSidecarDevServer(): Promise<SidecarDevServerHandle> 
         writeJson(response, 200, {
           ok: true,
           activeProjectId: state.activeProjectId
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/projects/import") {
+        let body: unknown;
+        try {
+          body = await readJsonBody(request);
+        } catch (parseError) {
+          const message = parseError instanceof Error ? parseError.message : String(parseError);
+          writeJson(response, 400, { ok: false, error: `Invalid JSON body: ${message}` });
+          return;
+        }
+
+        const importResult = importProjectBundle(state, body);
+        if (importResult.kind === "error") {
+          writeJson(response, 400, { ok: false, error: importResult.message });
+          return;
+        }
+
+        writeJson(response, 200, {
+          projectId: importResult.project.id,
+          project: importResult.project,
+          importedRuns: importResult.importedRuns,
+          importedApprovals: importResult.importedApprovals,
+          importedOperations: importResult.importedOperations,
+          unimportedRenders: importResult.unimportedRenders
         });
         return;
       }
@@ -1050,4 +1079,224 @@ function isFileNotFound(error: unknown): boolean {
     error !== null &&
     (error as { code?: string }).code === "ENOENT"
   );
+}
+
+interface ProjectImportSuccess {
+  readonly kind: "ok";
+  readonly project: Project;
+  readonly importedRuns: number;
+  readonly importedApprovals: number;
+  readonly importedOperations: number;
+  readonly unimportedRenders: readonly string[];
+}
+
+interface ProjectImportError {
+  readonly kind: "error";
+  readonly message: string;
+}
+
+type ProjectImportResult = ProjectImportSuccess | ProjectImportError;
+
+/**
+ * Validates a project-export bundle (the schema produced by
+ * `GET /projects/:id/export`) and inserts it into `state` under a freshly
+ * minted project ID. Returns a discriminated result so the caller can map
+ * validation failures to a 400 without ever throwing through to the 500
+ * branch — bad input is treated as a client error, never an internal one.
+ *
+ * Notes on ID rewriting:
+ *   - `project.id` is regenerated so two imports of the same bundle don't
+ *     collide on a single host.
+ *   - Approval IDs are regenerated for the same reason.
+ *   - Run IDs are preserved so existing event/render URLs keep working.
+ *   - Render paths are echoed back as `unimportedRenders`; they're host-local
+ *     filesystem paths and may not exist on this machine.
+ */
+function importProjectBundle(state: SidecarState, body: unknown): ProjectImportResult {
+  if (!isRecord(body)) {
+    return { kind: "error", message: "Expected a JSON object." };
+  }
+
+  if (body["schemaVersion"] !== 1) {
+    return {
+      kind: "error",
+      message: `Unsupported schemaVersion ${String(body["schemaVersion"])}; expected 1.`
+    };
+  }
+
+  const projectInput = body["project"];
+  if (!isRecord(projectInput)) {
+    return { kind: "error", message: "Expected `project` to be an object." };
+  }
+
+  const name =
+    typeof projectInput["name"] === "string" ? projectInput["name"].trim() : "";
+  if (name.length === 0) {
+    return { kind: "error", message: "Expected `project.name` to be a non-empty string." };
+  }
+
+  const approvalsInput = readArrayOrDefault(body["approvals"]);
+  if (approvalsInput === null) {
+    return { kind: "error", message: "Expected `approvals` to be an array." };
+  }
+  const runsInput = readArrayOrDefault(body["runs"]);
+  if (runsInput === null) {
+    return { kind: "error", message: "Expected `runs` to be an array." };
+  }
+  const operationsInput = readArrayOrDefault(body["operations"]);
+  if (operationsInput === null) {
+    return { kind: "error", message: "Expected `operations` to be an array." };
+  }
+
+  const renderPathsRaw = body["renderPaths"];
+  let unimportedRenders: string[];
+  if (renderPathsRaw === undefined) {
+    unimportedRenders = [];
+  } else if (Array.isArray(renderPathsRaw)) {
+    if (!renderPathsRaw.every((entry) => typeof entry === "string")) {
+      return { kind: "error", message: "Expected `renderPaths` to be an array of strings." };
+    }
+    unimportedRenders = renderPathsRaw as string[];
+  } else {
+    return { kind: "error", message: "Expected `renderPaths` to be an array of strings." };
+  }
+
+  const newProjectId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const project: Project = {
+    id: newProjectId,
+    name,
+    ...(typeof projectInput["description"] === "string"
+      ? { description: projectInput["description"] }
+      : {}),
+    ...(typeof projectInput["brief"] === "string" ? { brief: projectInput["brief"] } : {}),
+    ...(typeof projectInput["workspacePath"] === "string"
+      ? { workspacePath: projectInput["workspacePath"] }
+      : {}),
+    ...(projectInput["status"] === "draft" ||
+    projectInput["status"] === "active" ||
+    projectInput["status"] === "archived"
+      ? { status: projectInput["status"] as Project["status"] }
+      : {}),
+    createdAt: now,
+    updatedAt: now
+  };
+  addProject(state, project);
+
+  let importedApprovals = 0;
+  for (const entry of approvalsInput) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const kind = typeof entry["kind"] === "string" ? entry["kind"].trim() : "";
+    const summary = typeof entry["summary"] === "string" ? entry["summary"].trim() : "";
+    const status = entry["status"];
+    if (
+      kind.length === 0 ||
+      summary.length === 0 ||
+      (status !== "pending" && status !== "approved" && status !== "rejected")
+    ) {
+      continue;
+    }
+    const approval: Approval = {
+      id: crypto.randomUUID(),
+      projectId: newProjectId,
+      kind,
+      summary,
+      status,
+      ...(entry["payload"] !== undefined ? { payload: entry["payload"] } : {}),
+      createdAt:
+        typeof entry["createdAt"] === "string" ? (entry["createdAt"] as string) : now,
+      ...(typeof entry["decidedAt"] === "string"
+        ? { decidedAt: entry["decidedAt"] as string }
+        : {}),
+      ...(typeof entry["decidedBy"] === "string"
+        ? { decidedBy: entry["decidedBy"] as string }
+        : {}),
+      ...(typeof entry["reason"] === "string" ? { reason: entry["reason"] as string } : {})
+    };
+    addApproval(state, approval);
+    importedApprovals += 1;
+  }
+
+  let importedRuns = 0;
+  // Imports come oldest-first when iterated forward, but `recordPipelineRun`
+  // prepends. Walk the array in reverse so the original ordering is restored
+  // in the in-memory list.
+  for (let index = runsInput.length - 1; index >= 0; index -= 1) {
+    const entry = runsInput[index];
+    if (!isRecord(entry)) {
+      continue;
+    }
+    if (
+      typeof entry["id"] !== "string" ||
+      typeof entry["definitionId"] !== "string" ||
+      typeof entry["startedAt"] !== "string" ||
+      !Array.isArray(entry["results"])
+    ) {
+      continue;
+    }
+    const status = entry["status"];
+    const normalizedStatus =
+      status === "running" ||
+      status === "completed" ||
+      status === "failed" ||
+      status === "rejected"
+        ? status
+        : "completed";
+
+    const run: PipelineRunRecord = {
+      id: entry["id"] as string,
+      projectId: newProjectId,
+      ...(typeof entry["prompt"] === "string" ? { prompt: entry["prompt"] as string } : {}),
+      definitionId: entry["definitionId"] as string,
+      status: normalizedStatus,
+      startedAt: entry["startedAt"] as string,
+      ...(typeof entry["completedAt"] === "string"
+        ? { completedAt: entry["completedAt"] as string }
+        : {}),
+      results: entry["results"] as PipelineRunRecord["results"]
+    };
+    recordPipelineRun(state, run);
+    importedRuns += 1;
+  }
+
+  let importedOperations = 0;
+  for (let index = operationsInput.length - 1; index >= 0; index -= 1) {
+    const entry = operationsInput[index];
+    if (!isRecord(entry)) {
+      continue;
+    }
+    if (!isRecord(entry["operation"]) || !isRecord(entry["result"])) {
+      continue;
+    }
+    const operationEntry: RecentOperation = {
+      operation: entry["operation"] as RecentOperation["operation"],
+      result: entry["result"] as RecentOperation["result"],
+      projectId: newProjectId
+    };
+    recordOperation(state, operationEntry, newProjectId);
+    importedOperations += 1;
+  }
+
+  setActiveProject(state, newProjectId);
+
+  return {
+    kind: "ok",
+    project,
+    importedRuns,
+    importedApprovals,
+    importedOperations,
+    unimportedRenders
+  };
+}
+
+function readArrayOrDefault(value: unknown): unknown[] | null {
+  if (value === undefined) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value;
+  }
+  return null;
 }
