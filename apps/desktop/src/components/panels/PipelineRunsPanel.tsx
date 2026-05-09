@@ -28,14 +28,21 @@ import {
 } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  cancelPipelineRun,
   getPipelineRun,
   listPipelineRuns,
   type PipelineRunRecord,
   type PipelineRunStepResult
 } from "@/sidecarApi";
 import { subscribeToRun, type SseSubscription } from "@/eventStream";
+import { useDashboard } from "@/dashboard-context";
 
-export type RunStatusLabel = "running" | "completed" | "failed" | "rejected";
+export type RunStatusLabel =
+  | "running"
+  | "completed"
+  | "failed"
+  | "rejected"
+  | "cancelled";
 
 export type RunLiveState = {
   status: RunStatusLabel;
@@ -96,6 +103,7 @@ function inferRunStatus(run: PipelineRunRecord): RunStatusLabel {
       return "completed";
     if (lower === "failed" || lower === "error") return "failed";
     if (lower === "rejected") return "rejected";
+    if (lower === "cancelled" || lower === "canceled") return "cancelled";
   }
   const completedAt = (run as PipelineRunRecord & { completedAt?: string })
     .completedAt;
@@ -129,6 +137,14 @@ function RunStatusBadge({ status }: { status: RunStatusLabel }) {
       <Badge variant="destructive" className="inline-flex items-center gap-1">
         <Ban className="h-3 w-3" aria-hidden />
         {status}
+      </Badge>
+    );
+  }
+  if (status === "cancelled") {
+    return (
+      <Badge variant="secondary" className="inline-flex items-center gap-1">
+        <Ban className="h-3 w-3" aria-hidden />
+        cancelled
       </Badge>
     );
   }
@@ -202,12 +218,16 @@ function RunRow({
   run,
   liveStatus,
   liveResults,
-  liveProgress
+  liveProgress,
+  cancelBusy,
+  onCancel
 }: {
   run: PipelineRunRecord;
   liveStatus: RunStatusLabel;
   liveResults: PipelineRunStepResult[];
   liveProgress: { current: number; running: boolean } | null;
+  cancelBusy: boolean;
+  onCancel: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const heading =
@@ -219,39 +239,68 @@ function RunRow({
       onOpenChange={setOpen}
       className="rounded-md border border-border bg-card"
     >
-      <CollapsibleTrigger asChild>
-        <button
-          type="button"
-          className="flex w-full flex-col gap-2 px-3 py-2 text-left rounded-md hover:bg-muted/40 transition-colors"
-        >
-          <div className="flex items-center gap-2">
-            <RunStatusBadge status={liveStatus} />
-            <strong className="text-sm font-medium text-foreground">
-              {truncate(heading, 80)}
-            </strong>
-            <ChevronDown
-              className={cn(
-                "ml-auto h-4 w-4 text-muted-foreground transition-transform",
-                open && "rotate-180"
-              )}
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span>{relativeTime(run.startedAt)}</span>
-            <Badge variant="secondary" className="text-[10px]">
-              {liveResults.length}{" "}
-              {liveResults.length === 1 ? "step" : "steps"}
-            </Badge>
-            {liveProgress && liveStatus === "running" ? (
-              <span>
-                Step {liveProgress.current}
-                {liveResults.length ? `/${liveResults.length}` : ""} ·{" "}
-                {liveProgress.running ? "running" : "queued"}
-              </span>
-            ) : null}
-          </div>
-        </button>
-      </CollapsibleTrigger>
+      <div className="flex items-center gap-2 px-3 py-2">
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex flex-1 flex-col gap-2 text-left rounded-md hover:bg-muted/40 transition-colors -mx-1 px-1"
+          >
+            <div className="flex items-center gap-2">
+              <RunStatusBadge status={liveStatus} />
+              <strong className="text-sm font-medium text-foreground">
+                {truncate(heading, 80)}
+              </strong>
+              <ChevronDown
+                className={cn(
+                  "ml-auto h-4 w-4 text-muted-foreground transition-transform",
+                  open && "rotate-180"
+                )}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span>{relativeTime(run.startedAt)}</span>
+              <Badge variant="secondary" className="text-[10px]">
+                {liveResults.length}{" "}
+                {liveResults.length === 1 ? "step" : "steps"}
+              </Badge>
+              {liveProgress && liveStatus === "running" ? (
+                <span>
+                  Step {liveProgress.current}
+                  {liveResults.length ? `/${liveResults.length}` : ""} ·{" "}
+                  {liveProgress.running ? "running" : "queued"}
+                </span>
+              ) : null}
+            </div>
+          </button>
+        </CollapsibleTrigger>
+        {liveStatus === "running" ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={cancelBusy}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onCancel();
+            }}
+            aria-label={`Cancel run ${run.id}`}
+            title="Cancel this running pipeline"
+          >
+            {cancelBusy ? (
+              <>
+                <Loader2 className="animate-spin" />
+                Cancelling…
+              </>
+            ) : (
+              <>
+                <Ban />
+                Cancel
+              </>
+            )}
+          </Button>
+        ) : null}
+      </div>
       <CollapsibleContent className="border-t border-border/60 bg-muted/20 p-3">
         {liveResults.length === 0 ? (
           <span className="text-xs text-muted-foreground">
@@ -273,8 +322,10 @@ export function PipelineRunsPanel({
   activeProjectId,
   className
 }: PipelineRunsPanelProps) {
+  const { setSubmitBanner } = useDashboard();
   const [runs, setRuns] = useState<PipelineRunRecord[]>([]);
   const [liveById, setLiveById] = useState<Record<string, RunLiveState>>({});
+  const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const hasLoadedRef = useRef(false);
@@ -457,6 +508,70 @@ export function PipelineRunsPanel({
     };
   }, []);
 
+  const handleCancel = useCallback(
+    async (runId: string) => {
+      const confirmed =
+        typeof window !== "undefined" && typeof window.confirm === "function"
+          ? window.confirm(
+              "Cancel this running pipeline? The current step may still finish if it has already begun."
+            )
+          : true;
+      if (!confirmed) return;
+
+      setCancellingIds((current) => {
+        if (current.has(runId)) return current;
+        const next = new Set(current);
+        next.add(runId);
+        return next;
+      });
+
+      const result = await cancelPipelineRun(runId);
+
+      setCancellingIds((current) => {
+        if (!current.has(runId)) return current;
+        const next = new Set(current);
+        next.delete(runId);
+        return next;
+      });
+
+      if (result.kind === "cancelled") {
+        // Optimistically mark as cancelled until the next polling refresh
+        // (or the SSE final event) catches up.
+        setLiveById((current) => {
+          const prev = current[runId];
+          return {
+            ...current,
+            [runId]: {
+              status: "cancelled",
+              results: prev?.results ?? [],
+              progress: null
+            }
+          };
+        });
+        const sub = subscriptionsRef.current.get(runId);
+        sub?.close();
+        subscriptionsRef.current.delete(runId);
+        setSubmitBanner(`Cancelled run ${runId.slice(0, 8)}`);
+        void refreshRun(runId);
+        return;
+      }
+      if (result.kind === "already-terminal") {
+        setSubmitBanner(
+          `Run ${runId.slice(0, 8)} already finished — nothing to cancel.`
+        );
+        void load(false);
+        return;
+      }
+      if (result.kind === "not-found") {
+        setSubmitBanner(`Run ${runId.slice(0, 8)} could not be found.`);
+        void load(false);
+        return;
+      }
+      setSubmitBanner(`Cancel failed: ${result.message}`);
+    },
+    [load, refreshRun, setSubmitBanner]
+  );
+
   return (
     <Card className={cn("col-span-12 lg:col-span-7", className)} id="runs">
       <CardHeader className="flex-row items-start justify-between space-y-0 gap-4 pb-3">
@@ -529,6 +644,8 @@ export function PipelineRunsPanel({
                   liveStatus={liveStatus}
                   liveResults={liveResults}
                   liveProgress={liveProgress}
+                  cancelBusy={cancellingIds.has(run.id)}
+                  onCancel={() => void handleCancel(run.id)}
                 />
               );
             })

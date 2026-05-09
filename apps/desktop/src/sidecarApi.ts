@@ -710,6 +710,62 @@ export async function getPipelineRun(id: string): Promise<{ run: PipelineRunReco
   );
 }
 
+/**
+ * Result of a DELETE /pipeline/runs/:id call. The sidecar maps to
+ *   200 → run was running and is now cancelled
+ *   404 → no run with that id (already disappeared or never existed)
+ *   409 → run is already in a terminal state (completed/failed/cancelled)
+ *
+ * Network failures (sidecar unreachable, timeout, etc.) are surfaced as
+ * `{ kind: "error", message }` so the caller can show a banner.
+ */
+export type CancelPipelineRunResult =
+  | { kind: "cancelled" }
+  | { kind: "not-found" }
+  | { kind: "already-terminal" }
+  | { kind: "error"; message: string };
+
+export async function cancelPipelineRun(
+  runId: string
+): Promise<CancelPipelineRunResult> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const endpoint = `${sidecarBaseUrl}/pipeline/runs/${encodeURIComponent(runId)}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "DELETE",
+      headers: {
+        Accept: "application/json"
+      },
+      signal: controller.signal
+    });
+    if (response.status === 200) {
+      return { kind: "cancelled" };
+    }
+    if (response.status === 404) {
+      return { kind: "not-found" };
+    }
+    if (response.status === 409) {
+      return { kind: "already-terminal" };
+    }
+    return {
+      kind: "error",
+      message: `${response.status} ${response.statusText}`
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.name === "AbortError"
+          ? "Cancel request timed out"
+          : error.message
+        : "Cancel request failed";
+    return { kind: "error", message };
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 export async function syncBlender(): Promise<SidecarActionResult> {
   const result = await firstAvailable<unknown>(
     ["/blender/sync", "/api/blender/sync", "/sync/blender"],
