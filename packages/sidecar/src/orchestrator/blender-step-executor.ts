@@ -84,7 +84,11 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
     const runOp = async (): Promise<unknown> => {
       if (validatedOperation) {
         // operationRunner presence is guaranteed above when validatedOperation is set.
-        return this.operationRunner!.runOperation(validatedOperation);
+        const result = await this.operationRunner!.runOperation(validatedOperation);
+        if (result.status !== "succeeded") {
+          throw new Error(result.error ?? result.summary);
+        }
+        return result;
       }
       if (typeof pythonCandidate === "string" && pythonCandidate.length > 0) {
         if (!this.mcpClient) {

@@ -323,7 +323,7 @@ export async function createSidecarDevServer(): Promise<SidecarDevServerHandle> 
 
       if (request.method === "POST" && url.pathname === "/blender/demo/product-viz") {
         const body = await readJsonBody(request);
-        const operations = createProductVizOperations(body);
+        const operations = createProductVizOperations(body, state.activeProjectId);
         const results = [];
         for (const operation of operations) {
           const result = await blender.runOperation(operation);
@@ -746,7 +746,7 @@ export async function startSidecarDevServer(
 
   console.log(`[pipelinekit-sidecar] state loaded from ${handle.statePath}`);
 
-  const autoConnect = shouldAutoConnect();
+  const autoConnect = shouldAutoConnect(handle.state.settings.blender.autoConnect);
   if (autoConnect) {
     console.log("[pipelinekit-sidecar] auto-connect enabled");
     try {
@@ -766,10 +766,10 @@ export async function startSidecarDevServer(
   return handle;
 }
 
-function shouldAutoConnect(): boolean {
+function shouldAutoConnect(persistedValue: boolean): boolean {
   const raw = process.env["PIPELINEKIT_BLENDER_MCP_AUTOCONNECT"];
   if (!raw) {
-    return false;
+    return persistedValue;
   }
 
   const normalized = raw.trim().toLowerCase();
@@ -865,9 +865,9 @@ function parseOperationRequest(body: unknown): JsonOperation {
   };
 }
 
-function createProductVizOperations(body: unknown): readonly JsonOperation[] {
+function createProductVizOperations(body: unknown, activeProjectId: string | null): readonly JsonOperation[] {
   const input = isRecord(body) ? body : {};
-  const projectId = readString(input["projectId"], "demo");
+  const projectId = readString(input["projectId"], activeProjectId ?? "local");
   const idPrefix = readString(input["idPrefix"], `water-bottle-${Date.now()}`);
   const now = new Date().toISOString();
 
