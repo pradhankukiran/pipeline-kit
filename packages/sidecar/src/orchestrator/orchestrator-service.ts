@@ -1,4 +1,5 @@
 import type { BlenderOperation, ID, OperationResult } from "@pipelinekit/core";
+import type { BlenderMcpClient, BlenderMcpResult } from "../blender/mcp-client.js";
 import type {
   PipelineDefinition,
   PipelineEventSink,
@@ -220,14 +221,45 @@ export class OrchestratorService {
     }
 
     if (lanes.has("blender")) {
+      // Codex SDK is keyless (uses ChatGPT account or env), so we always wire
+      // a translator instance. The executor only invokes it when a blender
+      // step lacks both metadata.operation and metadata.python.
+      const codexTranslator = new CodexSdkProvider({
+        model: this.state.settings.models.codexModel
+      });
+      const adapter = this.blender;
+      const mcpClientShim: BlenderMcpClient = {
+        async connect() {
+          /* adapter.runPython handles its own connect lifecycle */
+        },
+        async listTools() {
+          return (await adapter.listTools()).tools;
+        },
+        async call(command): Promise<BlenderMcpResult> {
+          // The executor only ever invokes this with the script tool name
+          // (default "execute_blender_code"). Route through the adapter so
+          // its timeout/disconnect-on-error semantics apply.
+          const argName = Object.keys(command.arguments ?? {})[0] ?? "code";
+          const code = (command.arguments as Record<string, unknown> | undefined)?.[argName];
+          if (typeof code !== "string") {
+            throw new Error(`Blender mcp call requires a string '${argName}' argument.`);
+          }
+          return adapter.runPython(code);
+        },
+        async close() {
+          /* adapter owns the underlying client lifecycle */
+        }
+      };
       executors.push(
         new BlenderStepExecutor({
           operationRunner: {
             runOperation: (operation: BlenderOperation) =>
               this.blender.runOperation(operation as unknown as JsonOperation)
           },
+          mcpClient: mcpClientShim,
           gate: createApprovalGate(this.state),
-          state: this.state
+          state: this.state,
+          codexProvider: codexTranslator
         })
       );
     }

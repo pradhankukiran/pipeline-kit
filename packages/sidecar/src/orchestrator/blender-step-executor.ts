@@ -1,7 +1,7 @@
 import type { BlenderOperation, OperationResult } from "@pipelinekit/core";
 import { validateBlenderOperation } from "@pipelinekit/core";
 import type { BlenderMcpClient } from "../blender/mcp-client.js";
-import type { PipelineStepContext, PipelineStepExecutor } from "../providers/types.js";
+import type { ModelProvider, PipelineStepContext, PipelineStepExecutor } from "../providers/types.js";
 import type { SidecarState } from "../server/state.js";
 import type { ApprovalGate } from "./approval-gate.js";
 
@@ -41,6 +41,15 @@ export interface BlenderStepExecutorOptions {
    * gate is skipped (with a stderr warning) when no project ID is present.
    */
   readonly state?: SidecarState;
+  /**
+   * Optional Codex (or any ModelProvider) translator used as a fallback when a
+   * blender step arrives with neither `metadata.operation` nor
+   * `metadata.python`. Codex is asked to convert the step's `instruction`
+   * (plus prior step outputs) into either a typed `BlenderOperation` or raw
+   * bpy Python. When omitted, such steps surface the existing
+   * "requires either metadata.operation or metadata.python" error.
+   */
+  readonly codexProvider?: ModelProvider;
 }
 
 const DEFAULT_SCRIPT_TOOL_NAME = "execute_blender_code";
@@ -56,6 +65,7 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
   private readonly scriptArgumentName: string;
   private readonly gate?: ApprovalGate;
   private readonly state?: SidecarState;
+  private readonly codexProvider?: ModelProvider;
 
   constructor(options: BlenderStepExecutorOptions) {
     this.operationRunner = options.operationRunner;
@@ -64,6 +74,7 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
     this.scriptArgumentName = options.scriptArgumentName ?? DEFAULT_SCRIPT_ARGUMENT_NAME;
     this.gate = options.gate;
     this.state = options.state;
+    this.codexProvider = options.codexProvider;
   }
 
   async execute(context: PipelineStepContext): Promise<unknown> {
@@ -81,6 +92,23 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
       validatedOperation = validateBlenderOperation(operationCandidate);
     }
 
+    // Plain-instruction fallback: ask Codex to translate to a typed op or bpy.
+    let translatedPython: string | undefined;
+    const hasPython = typeof pythonCandidate === "string" && pythonCandidate.length > 0;
+    if (!validatedOperation && !hasPython && this.codexProvider) {
+      const translated = await this.translateInstructionViaCodex(context);
+      if (translated.kind === "operation") {
+        if (!this.operationRunner) {
+          throw new Error(
+            `Blender step "${context.step.id}" was translated to a typed operation but no operation runner is configured.`
+          );
+        }
+        validatedOperation = translated.operation;
+      } else {
+        translatedPython = translated.python;
+      }
+    }
+
     const runOp = async (): Promise<unknown> => {
       if (validatedOperation) {
         // operationRunner presence is guaranteed above when validatedOperation is set.
@@ -90,7 +118,8 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
         }
         return result;
       }
-      if (typeof pythonCandidate === "string" && pythonCandidate.length > 0) {
+      const pythonSource = hasPython ? (pythonCandidate as string) : translatedPython;
+      if (typeof pythonSource === "string" && pythonSource.length > 0) {
         if (!this.mcpClient) {
           throw new Error(
             `Blender step "${context.step.id}" provided python but no MCP client is configured.`
@@ -98,7 +127,7 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
         }
         const result = await this.mcpClient.call({
           name: this.scriptToolName,
-          arguments: { [this.scriptArgumentName]: pythonCandidate }
+          arguments: { [this.scriptArgumentName]: pythonSource }
         });
         return result.output;
       }
@@ -141,6 +170,136 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
     }
 
     return runOp();
+  }
+
+  /**
+   * Asks the configured `codexProvider` to convert a plain-instruction blender
+   * step into either a typed BlenderOperation or raw bpy Python. Returns the
+   * resolved discriminated union; throws a descriptive error if Codex returns
+   * malformed JSON, an unknown `kind`, an invalid BlenderOperation, or empty
+   * python source. The translator is intentionally one-shot — no retry — to
+   * keep latency bounded; callers who need stronger guarantees should pre-emit
+   * `metadata.operation` from the planner.
+   */
+  private async translateInstructionViaCodex(
+    context: PipelineStepContext
+  ): Promise<{ kind: "operation"; operation: BlenderOperation } | { kind: "python"; python: string }> {
+    const provider = this.codexProvider;
+    if (!provider) {
+      throw new Error("translateInstructionViaCodex called without a codexProvider.");
+    }
+
+    const userMessage = buildCodexTranslatorUserMessage(context);
+    const response = await provider.complete({
+      responseFormat: "json",
+      temperature: 0.1,
+      messages: [
+        { role: "system", content: CODEX_TRANSLATOR_SYSTEM_PROMPT },
+        { role: "user", content: userMessage }
+      ]
+    });
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(response.content) as unknown;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Codex translator returned non-JSON content: ${message}`);
+    }
+
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("Codex translator returned a non-object response.");
+    }
+    const record = parsed as Record<string, unknown>;
+    const kind = record["kind"];
+
+    if (kind === "operation") {
+      const operationCandidate = record["operation"];
+      if (operationCandidate === undefined) {
+        throw new Error('Codex translator returned kind="operation" with no operation field.');
+      }
+      try {
+        return { kind: "operation", operation: validateBlenderOperation(operationCandidate) };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Codex translator emitted an invalid BlenderOperation: ${message}`);
+      }
+    }
+
+    if (kind === "python") {
+      const pythonCandidate = record["python"];
+      if (typeof pythonCandidate !== "string" || pythonCandidate.length === 0) {
+        throw new Error('Codex translator returned kind="python" but `python` is empty or non-string.');
+      }
+      return { kind: "python", python: pythonCandidate };
+    }
+
+    throw new Error(`Codex translator returned invalid response: ${JSON.stringify(kind)}`);
+  }
+}
+
+const CODEX_TRANSLATOR_SYSTEM_PROMPT = `You are a Blender pipeline translator inside PipelineKit. Convert the user's plain instruction into ONE of two output shapes:
+
+1. A typed BlenderOperation (preferred):
+{"kind":"operation","operation":{ id, projectId, type, params, risk, requiresApproval, createdAt }}
+where type is one of: create_scene, create_studio_set, apply_material, create_lighting_rig, create_camera_rig, render_shot, inspect_scene, save_checkpoint. Each operation MUST include id (kebab-case), projectId (use "active" if unknown), risk ("low"|"medium"|"high"), requiresApproval (boolean), createdAt (ISO string), and params shaped per the operation type. Use sensible defaults; do not invent params not in the schema.
+
+Param shapes:
+- create_scene: { sceneName: string, units: "metric"|"imperial", clearExisting: boolean }
+- create_studio_set: { recipeId: "product_sweep"|"water_bottle_product_viz"|"pedestal", scale: number, variant?: string }
+- apply_material: { targetObject, materialAssetId? OR proceduralMaterialId? ("clear_plastic"|"frosted_plastic"|"brushed_aluminum"|"paper_label"|"matte_clay"|"glossy_white"), color?: "#rrggbb", roughness?, metallic?, alpha? }
+- create_lighting_rig: { preset: "studio_softbox"|"high_key_product"|"dramatic_rim"|"three_point", colorTemperature: int, intensity: number, useHdri: boolean, hdriAssetId? }
+- create_camera_rig: { shotLabel, focalLength, cameraMove?: "static"|"orbit"|"dolly"|"push_in", outputAspect: "1:1"|"4:5"|"16:9"|"9:16", targetObject? }
+- render_shot: { shotId, quality: "preview"|"review"|"final", outputPath }
+- inspect_scene: { includeObjects, includeMaterials, includeRenderSettings } (booleans)
+- save_checkpoint: { label, includeBlendFile }
+
+2. Raw Blender Python (fallback when no typed op fits):
+{"kind":"python","python":"<bpy snippet>"}
+Use bpy. Keep it self-contained and idempotent where possible. Avoid destructive ops unless the instruction asks for them.
+
+Return JSON ONLY. No prose, no markdown fences. Choose ONE shape — never both.`;
+
+function buildCodexTranslatorUserMessage(context: PipelineStepContext): string {
+  const lines: string[] = [];
+  lines.push(`Pipeline run prompt: ${context.input.prompt}`);
+  lines.push(`Step ID: ${context.step.id}`);
+  lines.push(`Step instruction: ${context.step.instruction}`);
+
+  const projectId = context.step.metadata?.["projectId"];
+  if (typeof projectId === "string" && projectId.length > 0) {
+    lines.push(`Active projectId: ${projectId}`);
+  }
+
+  const dependsOn = context.step.dependsOn ?? [];
+  if (dependsOn.length > 0) {
+    lines.push("Prior step outputs (truncated):");
+    for (const dep of dependsOn) {
+      const value = context.priorOutputs.get(dep);
+      lines.push(`- ${dep}: ${summarizePriorOutput(value)}`);
+    }
+  }
+
+  lines.push("");
+  lines.push("Translate the instruction now. Respond with JSON only.");
+  return lines.join("\n");
+}
+
+function summarizePriorOutput(value: unknown): string {
+  if (value === undefined) {
+    return "(no output)";
+  }
+  if (typeof value === "string") {
+    return value.length > 600 ? `${value.slice(0, 600)}...(truncated)` : value;
+  }
+  try {
+    const json = JSON.stringify(value);
+    if (typeof json !== "string") {
+      return "(unstringifiable output)";
+    }
+    return json.length > 600 ? `${json.slice(0, 600)}...(truncated)` : json;
+  } catch {
+    return "(unstringifiable output)";
   }
 }
 
