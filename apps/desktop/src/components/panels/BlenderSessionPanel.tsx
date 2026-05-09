@@ -94,10 +94,12 @@ const OP_ICONS: Record<BlenderOpId, React.ComponentType<{ className?: string }>>
 function OpCard({
   op,
   state,
+  disabled,
   onRun
 }: {
   op: QuickOp;
   state: OpRunState;
+  disabled: boolean;
   onRun: () => void;
 }) {
   const Icon = OP_ICONS[op.id];
@@ -135,7 +137,7 @@ function OpCard({
         size="sm"
         variant="outline"
         onClick={onRun}
-        disabled={running}
+        disabled={disabled || running}
         className="shrink-0"
       >
         {running ? <Loader2 className="animate-spin" /> : <Play />}
@@ -196,7 +198,7 @@ export function BlenderSessionPanel({
               type="button"
               variant="outline"
               onClick={onListTools}
-              disabled={actions.tools || loading}
+              disabled={!session.connected || actions.tools || loading}
             >
               {actions.tools ? <Loader2 className="animate-spin" /> : <Wrench />}
               {actions.tools ? "Loading…" : "List Tools"}
@@ -205,7 +207,7 @@ export function BlenderSessionPanel({
               type="button"
               variant="secondary"
               onClick={onRunDemo}
-              disabled={actions.demo || loading}
+              disabled={!session.connected || actions.demo || loading}
             >
               {actions.demo ? <Loader2 className="animate-spin" /> : <Sparkles />}
               {actions.demo ? "Submitting…" : "Run Product Viz Demo"}
@@ -253,7 +255,9 @@ export function BlenderSessionPanel({
               Quick operations
             </p>
             <p className="text-xs text-muted-foreground">
-              Run typed Blender ops with sensible defaults
+              {session.connected
+                ? "Run typed Blender ops with sensible defaults"
+                : "Connect Blender before running scene operations"}
             </p>
           </div>
           <div className="space-y-2">
@@ -262,6 +266,7 @@ export function BlenderSessionPanel({
                 key={op.id}
                 op={op}
                 state={opStates[op.id] ?? { status: "idle" }}
+                disabled={!session.connected || loading}
                 onRun={() => onRunOp(op)}
               />
             ))}

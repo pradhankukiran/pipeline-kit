@@ -16,6 +16,7 @@ export function ProjectLayout() {
   const {
     projects,
     projectsLoading,
+    projectsError,
     activeProjectId,
     handleSelectProject
   } = useDashboard();
@@ -42,6 +43,22 @@ export function ProjectLayout() {
       >
         <div className="flex h-full items-center justify-center p-12 text-sm text-muted-foreground">
           Loading project…
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (projectsError) {
+    return (
+      <AppShell
+        projectPicker={projectPicker}
+        topbarMetrics={topbarMetrics}
+        topbarActions={topbarActions}
+        apiStatus={apiStatus}
+        disableContentContainer
+      >
+        <div className="flex h-full items-center justify-center p-12 text-sm text-muted-foreground">
+          {projectsError}
         </div>
       </AppShell>
     );

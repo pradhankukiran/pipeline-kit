@@ -109,6 +109,17 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function readApiError(data: Record<string, unknown>): string | undefined {
+  if (data.ok !== false) {
+    return undefined;
+  }
+  return typeof data.message === "string"
+    ? data.message
+    : typeof data.error === "string"
+      ? data.error
+      : "Request failed";
+}
+
 function normalizeHealth(value: unknown): SidecarHealth {
   const data = asRecord(value);
   const blender = asRecord(data.blender);
@@ -154,6 +165,11 @@ function normalizeSettings(value: unknown): Partial<PipelineSettings> {
         : typeof blender.args === "string"
           ? blender.args
           : undefined,
+    autoConnect: typeof settings.autoConnect === "boolean"
+      ? settings.autoConnect
+      : typeof blender.autoConnect === "boolean"
+        ? blender.autoConnect
+        : undefined,
     groqModel: typeof settings.groqModel === "string"
       ? settings.groqModel
       : typeof models.groqModel === "string"
@@ -192,10 +208,13 @@ function normalizeTool(value: unknown): BlenderTool {
 
 function unwrapTools(value: unknown): BlenderTool[] {
   const data = asRecord(value);
+  const toolsEnvelope = asRecord(data.tools);
   const rawTools = Array.isArray(value)
     ? value
     : Array.isArray(data.tools)
       ? data.tools
+      : Array.isArray(toolsEnvelope.tools)
+        ? toolsEnvelope.tools
       : Array.isArray(data.data)
         ? data.data
         : [];
@@ -213,13 +232,19 @@ function normalizeOperation(value: unknown, fallbackTitle: string): OperationRec
       ? nestedResult.status.toLowerCase()
       : "";
   const status: OperationRecord["status"] =
-    rawStatus === "complete" || rawStatus === "completed" || rawStatus === "ok"
+    rawStatus === "complete" ||
+    rawStatus === "completed" ||
+    rawStatus === "ok" ||
+    rawStatus === "succeeded" ||
+    rawStatus === "success"
       ? "Complete"
       : rawStatus === "failed" || rawStatus === "error"
         ? "Failed"
         : rawStatus === "running"
           ? "Running"
-          : "Queued";
+          : rawStatus === "skipped" || rawStatus === "offline"
+            ? "Offline"
+            : "Queued";
 
   return {
     id: typeof data.id === "string"
@@ -303,6 +328,17 @@ export async function saveSettings(settings: PipelineSettings): Promise<SidecarA
   }
 
   const data = asRecord(result.data);
+  const failure = readApiError(data);
+  if (failure) {
+    return {
+      ok: false,
+      message: failure,
+      endpoint: result.endpoint,
+      snapshot: unwrapSnapshot(data),
+      operation: unwrapOperation(data, "Connect Blender")
+    };
+  }
+
   return {
     ok: true,
     message: typeof data.message === "string" ? data.message : "Settings saved",
@@ -341,6 +377,17 @@ export async function connectBlender(settings: PipelineSettings): Promise<Sideca
   }
 
   const data = asRecord(result.data);
+  const failure = readApiError(data);
+  if (failure) {
+    return {
+      ok: false,
+      message: failure,
+      endpoint: result.endpoint,
+      snapshot: unwrapSnapshot(data),
+      operation: unwrapOperation(data, "Connect Blender")
+    };
+  }
+
   return {
     ok: true,
     message: typeof data.message === "string" ? data.message : "Blender connection requested",
@@ -359,7 +406,7 @@ function toSidecarSettings(settings: PipelineSettings): Record<string, unknown> 
     blender: {
       command: settings.blenderMcpCommand,
       args: settings.blenderMcpArgs.split(/\s+/).map((part) => part.trim()).filter(Boolean),
-      autoConnect: true
+      autoConnect: settings.autoConnect
     },
     groq: {
       apiKey: settings.groqApiKey
@@ -372,18 +419,43 @@ function toSidecarSettings(settings: PipelineSettings): Record<string, unknown> 
 
 export async function listBlenderTools(): Promise<ApiResult<BlenderTool[]>> {
   const result = await requestJson<unknown>("/blender/tools");
+  if (!result.data) {
+    return {
+      data: null,
+      error: result.error,
+      endpoint: result.endpoint
+    };
+  }
+
+  const data = asRecord(result.data);
+  const blender = asRecord(data.blender);
+  if (data.fallback === true || blender.connected === false) {
+    return {
+      data: null,
+      error: typeof data.error === "string" ? data.error : "Blender MCP is not connected",
+      endpoint: result.endpoint
+    };
+  }
 
   return {
-    data: result.data ? unwrapTools(result.data) : null,
+    data: unwrapTools(result.data),
     error: result.error,
     endpoint: result.endpoint
   };
 }
 
 export async function runBlenderOperation(request: BlenderOperationRequest): Promise<SidecarActionResult> {
+  const args = asRecord(request.arguments);
+  const operation = args.operation;
   const result = await requestJson<unknown>("/blender/operation", {
     method: "POST",
-    body: JSON.stringify({ source: "desktop", ...request })
+    body: JSON.stringify({
+      source: "desktop",
+      operation: operation && typeof operation === "object" ? operation : {
+        type: request.tool,
+        params: args
+      }
+    })
   });
 
   if (!result.data) {
@@ -394,6 +466,17 @@ export async function runBlenderOperation(request: BlenderOperationRequest): Pro
   }
 
   const data = asRecord(result.data);
+  const failure = readApiError(data);
+  if (failure) {
+    return {
+      ok: false,
+      message: failure,
+      endpoint: result.endpoint,
+      snapshot: unwrapSnapshot(data),
+      operation: unwrapOperation(data, request.tool)
+    };
+  }
+
   return {
     ok: true,
     message: typeof data.message === "string" ? data.message : "Blender operation requested",
@@ -417,6 +500,17 @@ export async function runProductVizDemo(): Promise<SidecarActionResult> {
   }
 
   const data = asRecord(result.data);
+  const failure = readApiError(data);
+  if (failure) {
+    return {
+      ok: false,
+      message: failure,
+      endpoint: result.endpoint,
+      snapshot: unwrapSnapshot(data),
+      operation: unwrapOperation(data, "Product viz demo")
+    };
+  }
+
   return {
     ok: true,
     message: typeof data.message === "string" ? data.message : "Product viz demo requested",
@@ -624,6 +718,16 @@ export async function syncBlender(): Promise<SidecarActionResult> {
 
   if (result.data) {
     const data = asRecord(result.data);
+    const failure = readApiError(data);
+    if (failure) {
+      return {
+        ok: false,
+        message: failure,
+        endpoint: result.endpoint,
+        snapshot: unwrapSnapshot(data)
+      };
+    }
+
     return {
       ok: true,
       message: typeof data.message === "string" ? data.message : "Blender sync requested",
@@ -666,6 +770,10 @@ async function requestJsonOrThrow<T>(path: string, init?: RequestInit): Promise<
   const result = await requestJson<T>(path, init);
   if (!result.data) {
     throw new Error(result.error ?? `Sidecar request failed: ${path}`);
+  }
+  const failure = readApiError(asRecord(result.data));
+  if (failure) {
+    throw new Error(failure);
   }
   return result.data;
 }
@@ -776,6 +884,16 @@ export async function runSamplePlanner(): Promise<SidecarActionResult> {
   }
 
   const data = asRecord(result.data);
+  const failure = readApiError(data);
+  if (failure) {
+    return {
+      ok: false,
+      message: failure,
+      endpoint: result.endpoint,
+      snapshot: unwrapSnapshot(data)
+    };
+  }
+
   return {
     ok: true,
     message: typeof data.message === "string" ? data.message : "Sample planner run requested",

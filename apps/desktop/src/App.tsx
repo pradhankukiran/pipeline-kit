@@ -60,49 +60,64 @@ const QUICK_OPS: QuickOp[] = [
     id: "create_scene",
     label: "Create Scene",
     blurb: "Initialize a new Blender scene with metric units.",
-    defaultParams: { units: "metric", clearExisting: true }
+    defaultParams: { sceneName: "PipelineKit Scene", units: "metric", clearExisting: true }
   },
   {
     id: "create_studio_set",
     label: "Studio Set",
     blurb: "Instantiate a preset studio recipe (white sweep, softbox, turntable).",
-    defaultParams: { recipeId: "water_bottle_product_viz" }
+    defaultParams: { recipeId: "water_bottle_product_viz", scale: 1, variant: "clean-studio" }
   },
   {
     id: "apply_material",
     label: "Apply Material",
     blurb: "Assign a procedural material to the active object.",
-    defaultParams: { target: "Subject", materialId: "matte-clay" }
+    defaultParams: { targetObject: "Subject", proceduralMaterialId: "matte_clay" }
   },
   {
     id: "create_lighting_rig",
     label: "Lighting Rig",
     blurb: "Build a softbox three-point lighting setup.",
-    defaultParams: { recipeId: "softbox-three-point", hdri: null }
+    defaultParams: {
+      preset: "studio_softbox",
+      colorTemperature: 5600,
+      intensity: 1,
+      useHdri: false
+    }
   },
   {
     id: "create_camera_rig",
     label: "Camera Rig",
     blurb: "Place a turntable orbit camera around the subject.",
-    defaultParams: { recipeId: "turntable-orbit", focalLength: 50 }
+    defaultParams: {
+      shotLabel: "Hero Shot",
+      focalLength: 50,
+      cameraMove: "orbit",
+      outputAspect: "16:9",
+      targetObject: "Subject"
+    }
   },
   {
     id: "render_shot",
     label: "Render Shot",
     blurb: "Render the current shot at preview quality.",
-    defaultParams: { quality: "preview", label: "preview" }
+    defaultParams: { shotId: "preview", quality: "preview", outputPath: "//renders/pipelinekit_preview.png" }
   },
   {
     id: "inspect_scene",
     label: "Inspect Scene",
     blurb: "Dump objects, materials, and render settings.",
-    defaultParams: {}
+    defaultParams: {
+      includeObjects: true,
+      includeMaterials: true,
+      includeRenderSettings: true
+    }
   },
   {
     id: "save_checkpoint",
     label: "Save Checkpoint",
     blurb: "Persist a labeled checkpoint with the current scene.",
-    defaultParams: { label: "auto-checkpoint", saveBlend: true }
+    defaultParams: { label: "auto-checkpoint", includeBlendFile: true }
   }
 ];
 
@@ -126,15 +141,15 @@ function mergeSnapshot(current: PipelineSnapshot, next: Partial<PipelineSnapshot
   return {
     ...current,
     ...next,
-    navItems: next.navItems?.length ? next.navItems : current.navItems,
+    navItems: next.navItems !== undefined ? next.navItems : current.navItems,
     metrics: { ...current.metrics, ...next.metrics },
-    projects: next.projects?.length ? next.projects : current.projects,
-    brief: next.brief?.length ? next.brief : current.brief,
-    board: next.board?.length ? next.board : current.board,
+    projects: next.projects !== undefined ? next.projects : current.projects,
+    brief: next.brief !== undefined ? next.brief : current.brief,
+    board: next.board !== undefined ? next.board : current.board,
     blenderSession: { ...current.blenderSession, ...next.blenderSession },
-    assets: next.assets?.length ? next.assets : current.assets,
-    shots: next.shots?.length ? next.shots : current.shots,
-    reviewNotes: next.reviewNotes?.length ? next.reviewNotes : current.reviewNotes
+    assets: next.assets !== undefined ? next.assets : current.assets,
+    shots: next.shots !== undefined ? next.shots : current.shots,
+    reviewNotes: next.reviewNotes !== undefined ? next.reviewNotes : current.reviewNotes
   };
 }
 
@@ -150,7 +165,6 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>("Loading local sidecar state");
   const [settings, setSettings] = useState<PipelineSettings>(fallbackSettings);
-  const [autoConnect, setAutoConnect] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tools, setTools] = useState<BlenderTool[]>([]);
   const [operations, setOperations] = useState<OperationRecord[]>(fallbackOperations);
@@ -196,25 +210,23 @@ export function App() {
   }, [refreshProjects]);
 
   const handleSelectProject = useCallback(async (id: string) => {
-    setActiveProjectIdState(id);
+    const previousId = activeProjectId;
     try {
       await setActiveProject(id);
+      setActiveProjectIdState(id);
       setProjectsError(null);
     } catch (err) {
+      setActiveProjectIdState(previousId);
       setProjectsError(err instanceof Error ? err.message : "Could not set active project");
     }
-  }, []);
+  }, [activeProjectId]);
 
   const handleCreateProject = useCallback(
     async (name: string) => {
       const { project } = await createProject({ name });
       await refreshProjects();
+      await setActiveProject(project.id);
       setActiveProjectIdState(project.id);
-      try {
-        await setActiveProject(project.id);
-      } catch {
-        // server-side activation can fail silently; local state already reflects selection
-      }
       navigate(`/projects/${project.id}/overview`);
     },
     [refreshProjects, navigate]
@@ -300,6 +312,12 @@ export function App() {
     };
   }, [health, snapshot.blenderSession]);
 
+  useEffect(() => {
+    if (!blenderSession.connected) {
+      setTools([]);
+    }
+  }, [blenderSession.connected]);
+
   const handleSyncBlender = useCallback(async () => {
     setActions((current) => ({ ...current, sync: true }));
     setError(null);
@@ -350,6 +368,10 @@ export function App() {
     setSettings((current) => ({ ...current, [field]: value }));
   }, []);
 
+  const setAutoConnect = useCallback((value: boolean) => {
+    setSettings((current) => ({ ...current, autoConnect: value }));
+  }, []);
+
   const handleSaveSettings = useCallback(async () => {
     setActions((current) => ({ ...current, saveSettings: true }));
     setError(null);
@@ -379,6 +401,10 @@ export function App() {
       setHealth(healthResult.data);
     }
 
+    if (!result.ok) {
+      setTools([]);
+    }
+
     setMessage(result.message);
     setError(result.ok ? null : result.message);
     setActions((current) => ({ ...current, connect: false }));
@@ -390,12 +416,14 @@ export function App() {
     setMessage("Listing Blender MCP tools");
 
     const result = await listBlenderTools();
-    if (result.data) {
+    if (result.data !== null) {
       setTools(result.data);
+    } else {
+      setTools([]);
     }
 
-    setMessage(result.data ? `Loaded ${result.data.length} Blender tools` : "Blender tools endpoint unavailable; static UI remains active.");
-    setError(result.data ? null : result.error ?? "Blender tools endpoint unavailable");
+    setMessage(result.data !== null ? `Loaded ${result.data.length} Blender tools` : result.error ?? "Connect Blender before listing tools.");
+    setError(result.data !== null ? null : result.error ?? "Blender MCP is not connected");
     setActions((current) => ({ ...current, tools: false }));
   }, []);
 
@@ -434,8 +462,11 @@ export function App() {
       arguments: {
         operation: {
           id: crypto.randomUUID(),
+          projectId: activeProjectId ?? "local",
           type: op.id,
           params: op.defaultParams,
+          risk: "low",
+          createdAt: new Date().toISOString(),
           requiresApproval: false
         }
       }
@@ -456,7 +487,7 @@ export function App() {
         [op.id]: { status: "failed", summary: truncate(result.message) }
       }));
     }
-  }, []);
+  }, [activeProjectId]);
 
   const contextValue = useMemo<DashboardContextValue>(
     () => ({
@@ -473,7 +504,7 @@ export function App() {
       message,
       sidecarUrl: sidecarBaseUrl,
       settings,
-      autoConnect,
+      autoConnect: settings.autoConnect,
       setAutoConnect,
       updateSetting,
       handleSaveSettings,
@@ -510,7 +541,6 @@ export function App() {
       error,
       message,
       settings,
-      autoConnect,
       updateSetting,
       handleSaveSettings,
       settingsOpen,
@@ -554,7 +584,7 @@ export function App() {
         settings={settings}
         saving={actions.saveSettings}
         disabled={loading}
-        autoConnect={autoConnect}
+        autoConnect={settings.autoConnect}
         onAutoConnectChange={setAutoConnect}
         onChange={updateSetting}
         onSave={handleSaveSettings}

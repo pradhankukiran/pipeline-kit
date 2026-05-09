@@ -50,6 +50,7 @@ export type ProductionMetrics = {
 export type PipelineSettings = {
   blenderMcpCommand: string;
   blenderMcpArgs: string;
+  autoConnect: boolean;
   groqModel: string;
   groqApiKey: string;
   openRouterModel: string;
@@ -80,6 +81,7 @@ export type PipelineSnapshot = {
 export const fallbackSettings: PipelineSettings = {
   blenderMcpCommand: "blender-socket",
   blenderMcpArgs: "",
+  autoConnect: false,
   groqModel: "llama-3.3-70b-versatile",
   groqApiKey: "",
   openRouterModel: "anthropic/claude-3.5-sonnet",

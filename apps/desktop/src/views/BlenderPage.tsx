@@ -31,7 +31,7 @@ export function BlenderPage() {
           onRunDemo={() => void ctx.handleRunProductVizDemo()}
           onRunOp={(op) => void ctx.handleRunQuickOp(op)}
         />
-        <SceneStatePanel enabled={true} />
+        <SceneStatePanel enabled={ctx.health?.ok === true && ctx.blenderSession.connected} />
       </div>
       <RecentRendersPanel operations={ctx.operations} loading={ctx.loading} />
     </div>

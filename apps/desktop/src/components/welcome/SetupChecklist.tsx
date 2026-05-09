@@ -120,7 +120,7 @@ export function SetupChecklist(props: SetupChecklistProps) {
         key="blender"
         status="done"
         title="Blender connected"
-        subtitle="MCP bridge active and tools loaded."
+        subtitle="MCP bridge active and ready for scene operations."
         right={<span className="text-xs text-muted-foreground">Ready</span>}
       />
     );
