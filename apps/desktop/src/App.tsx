@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 
 import { SettingsPanel } from "@/components/panels/SettingsPanel";
+import { useMenuEvents } from "@/lib/menu-events";
 import {
   DashboardContext,
   type DashboardContextValue,
@@ -653,6 +654,7 @@ export function App() {
 
   return (
     <DashboardContext.Provider value={contextValue}>
+      <MenuEventBridge />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<WelcomePage />} />
@@ -685,4 +687,15 @@ export function App() {
       />
     </DashboardContext.Provider>
   );
+}
+
+/**
+ * Sits inside DashboardContext.Provider so it can use `useDashboard()`.
+ * The single responsibility is to subscribe to native-menu IPC events
+ * and route them to dashboard handlers. Rendered as a no-op child so it
+ * doesn't affect the React tree visually.
+ */
+function MenuEventBridge() {
+  useMenuEvents();
+  return null;
 }

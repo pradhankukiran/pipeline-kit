@@ -17,6 +17,8 @@ use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+mod menu;
+
 const SIDECAR_PORT: u16 = 4317;
 const SIDECAR_RESOURCE: &str = "resources/pipelinekit-sidecar.cjs";
 
@@ -163,7 +165,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .on_menu_event(menu::handle_menu_event)
         .setup(|app| {
+            if let Err(err) = menu::build_and_install(&app.handle()) {
+                eprintln!("[pipelinekit] failed to install application menu: {err}");
+            }
             if let Err(err) = spawn_sidecar(&app.handle()) {
                 eprintln!("[pipelinekit] sidecar spawn failed: {err}");
                 let log_path = log_dir().join("sidecar.log");
