@@ -5,6 +5,7 @@ import {
   RefreshCw,
   Settings as SettingsIcon
 } from "lucide-react";
+import { useRef } from "react";
 import { useMatch, useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -106,6 +107,11 @@ export function useTopbarSlots() {
     projectsLoading,
     snapshot,
     handleSelectProject,
+    handleExportProject,
+    handleImportProject,
+    exportingProject,
+    importingProject,
+    setSubmitBanner,
     health,
     loading,
     error,
@@ -116,20 +122,54 @@ export function useTopbarSlots() {
     handleRunPlanner,
     setSettingsOpen
   } = useDashboard();
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const sidecarOnline = health?.ok === true;
   const plannerReady = sidecarOnline && Boolean(currentProjectId) && settings.groqApiKey.trim().length > 0;
 
+  const handleImportFileSelected = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    // Always reset the input so the same file can be re-selected later.
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const bundle = JSON.parse(text) as object;
+      await handleImportProject(bundle);
+    } catch (err) {
+      const reason =
+        err instanceof Error
+          ? err.message
+          : "Could not read or parse the bundle";
+      setSubmitBanner(`Import failed: ${reason}`);
+    }
+  };
+
   const projectPicker = (
-    <ProjectPicker
-      projects={projects}
-      currentProjectId={currentProjectId}
-      loading={projectsLoading}
-      onSelect={(id) => {
-        void handleSelectProject(id);
-        navigate(`/projects/${id}/overview`);
-      }}
-      onCreateRequested={() => navigate("/")}
-    />
+    <>
+      <ProjectPicker
+        projects={projects}
+        currentProjectId={currentProjectId}
+        loading={projectsLoading}
+        onSelect={(id) => {
+          void handleSelectProject(id);
+          navigate(`/projects/${id}/overview`);
+        }}
+        onCreateRequested={() => navigate("/")}
+        onExportRequested={() => void handleExportProject()}
+        onImportRequested={() => importInputRef.current?.click()}
+        exportBusy={exportingProject}
+        importBusy={importingProject}
+      />
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json"
+        className="hidden"
+        onChange={(event) => void handleImportFileSelected(event)}
+      />
+    </>
   );
 
   const topbarMetrics = (

@@ -27,9 +27,11 @@ import {
 import {
   connectBlender,
   createProject,
+  exportProject,
   getRecentOperations,
   getSettings,
   getSidecarHealth,
+  importProject,
   listBlenderTools,
   listProjects,
   runBlenderOperation,
@@ -185,6 +187,8 @@ export function App() {
   const [, setLastSubmittedRunId] = useState<string | null>(null);
   const [submitBanner, setSubmitBanner] = useState<string | null>(null);
   const [approvalsRefreshTick, setApprovalsRefreshTick] = useState(0);
+  const [exportingProject, setExportingProject] = useState(false);
+  const [importingProject, setImportingProject] = useState(false);
 
   const refreshProjects = useCallback(async (): Promise<{
     projects: ProjectRecord[];
@@ -228,6 +232,66 @@ export function App() {
       await setActiveProject(project.id);
       setActiveProjectIdState(project.id);
       navigate(`/projects/${project.id}/overview`);
+    },
+    [refreshProjects, navigate]
+  );
+
+  const handleExportProject = useCallback(async () => {
+    if (!activeProjectId) {
+      setSubmitBanner("Select a project before exporting.");
+      return;
+    }
+    setExportingProject(true);
+    try {
+      const { blob, filename } = await exportProject(activeProjectId);
+      // Trigger a browser download via a temporary anchor; the URL is
+      // immediately revoked once the click has fired.
+      const url = URL.createObjectURL(blob);
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.rel = "noopener";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      setSubmitBanner(`Exported project as ${filename}`);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "Export failed";
+      setSubmitBanner(`Export failed: ${reason}`);
+    } finally {
+      setExportingProject(false);
+    }
+  }, [activeProjectId]);
+
+  const handleImportProject = useCallback(
+    async (bundle: object) => {
+      setImportingProject(true);
+      try {
+        const result = await importProject(bundle);
+        await refreshProjects();
+        if (result.projectId) {
+          await setActiveProject(result.projectId);
+          setActiveProjectIdState(result.projectId);
+          navigate(`/projects/${result.projectId}/overview`);
+        }
+        const note: string[] = [];
+        note.push(`runs: ${result.importedRuns}`);
+        note.push(`approvals: ${result.importedApprovals}`);
+        note.push(`ops: ${result.importedOperations}`);
+        if (result.unimportedRenders > 0) {
+          note.push(`unimported renders: ${result.unimportedRenders}`);
+        }
+        setSubmitBanner(`Imported project · ${note.join(", ")}`);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : "Import failed";
+        setSubmitBanner(`Import failed: ${reason}`);
+      } finally {
+        setImportingProject(false);
+      }
     },
     [refreshProjects, navigate]
   );
@@ -508,6 +572,10 @@ export function App() {
       activeProjectId,
       handleCreateProject,
       handleSelectProject,
+      handleExportProject,
+      handleImportProject,
+      exportingProject,
+      importingProject,
       health,
       loading,
       error,
@@ -546,6 +614,10 @@ export function App() {
       activeProjectId,
       handleCreateProject,
       handleSelectProject,
+      handleExportProject,
+      handleImportProject,
+      exportingProject,
+      importingProject,
       health,
       loading,
       error,

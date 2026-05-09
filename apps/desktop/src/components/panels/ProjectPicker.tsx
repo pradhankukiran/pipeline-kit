@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { Check, ChevronDown, FolderPlus, Plus } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Download,
+  FolderPlus,
+  Loader2,
+  Plus,
+  Upload,
+} from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +26,10 @@ export interface ProjectPickerProps {
   loading: boolean;
   onSelect: (id: string) => void;
   onCreateRequested: () => void;
+  onExportRequested?: () => void;
+  onImportRequested?: () => void;
+  exportBusy?: boolean;
+  importBusy?: boolean;
 }
 
 export function ProjectPicker({
@@ -26,6 +38,10 @@ export function ProjectPicker({
   loading,
   onSelect,
   onCreateRequested,
+  onExportRequested,
+  onImportRequested,
+  exportBusy = false,
+  importBusy = false,
 }: ProjectPickerProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -109,6 +125,44 @@ export function ProjectPicker({
           <Plus aria-hidden />
           <span>Create new project…</span>
         </DropdownMenuItem>
+        {onExportRequested ? (
+          <DropdownMenuItem
+            disabled={!current || exportBusy}
+            onSelect={(event) => {
+              event.preventDefault();
+              if (!current || exportBusy) return;
+              setMenuOpen(false);
+              onExportRequested();
+            }}
+            className="gap-2 px-2 py-2 text-sm"
+          >
+            {exportBusy ? (
+              <Loader2 className="animate-spin" aria-hidden />
+            ) : (
+              <Download aria-hidden />
+            )}
+            <span>{exportBusy ? "Exporting…" : "Export current project"}</span>
+          </DropdownMenuItem>
+        ) : null}
+        {onImportRequested ? (
+          <DropdownMenuItem
+            disabled={importBusy}
+            onSelect={(event) => {
+              event.preventDefault();
+              if (importBusy) return;
+              setMenuOpen(false);
+              onImportRequested();
+            }}
+            className="gap-2 px-2 py-2 text-sm"
+          >
+            {importBusy ? (
+              <Loader2 className="animate-spin" aria-hidden />
+            ) : (
+              <Upload aria-hidden />
+            )}
+            <span>{importBusy ? "Importing…" : "Import project…"}</span>
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

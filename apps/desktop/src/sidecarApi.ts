@@ -903,6 +903,145 @@ export async function setActiveProject(
   });
 }
 
+const PROJECT_BUNDLE_TIMEOUT_MS = 60_000;
+
+/**
+ * GET /projects/:id/export → fetches the export bundle (project + approvals
+ * + runs + operations + renderPaths) as a Blob ready to be downloaded.
+ *
+ * Returns the bundle blob and a suggested filename derived from the
+ * `Content-Disposition` header (or a UUID-based fallback when missing).
+ */
+export async function exportProject(
+  projectId: string
+): Promise<{ blob: Blob; filename: string }> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    PROJECT_BUNDLE_TIMEOUT_MS
+  );
+  const endpoint = `${sidecarBaseUrl}/projects/${encodeURIComponent(projectId)}/export`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        Accept: "application/json"
+      },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}`);
+    }
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const filename = parseFilenameFromContentDisposition(disposition, projectId);
+    const blob = await response.blob();
+    return { blob, filename };
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function parseFilenameFromContentDisposition(
+  header: string,
+  projectId: string
+): string {
+  // Try RFC 5987 first (filename*=UTF-8''…), then plain `filename="…"`.
+  const star = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star && star[1]) {
+    try {
+      return decodeURIComponent(star[1]);
+    } catch {
+      // fall through
+    }
+  }
+  const quoted = header.match(/filename="?([^";]+)"?/i);
+  if (quoted && quoted[1]) {
+    return quoted[1];
+  }
+  return `pipelinekit-project-${projectId.slice(0, 8)}.json`;
+}
+
+export type ImportProjectResponse = {
+  projectId: string;
+  project: ProjectRecord;
+  importedRuns: number;
+  importedApprovals: number;
+  importedOperations: number;
+  unimportedRenders: number;
+};
+
+/**
+ * POST /projects/import with the previously-exported bundle. The sidecar
+ * creates a fresh project (new id) and seeds approvals/runs/operations from
+ * the bundle. Returns the new projectId plus per-collection counts.
+ */
+export async function importProject(
+  bundle: object
+): Promise<ImportProjectResponse> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    PROJECT_BUNDLE_TIMEOUT_MS
+  );
+  const endpoint = `${sidecarBaseUrl}/projects/import`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(bundle),
+      signal: controller.signal
+    });
+    let parsed: unknown = null;
+    try {
+      parsed = await response.json();
+    } catch {
+      parsed = null;
+    }
+    if (!response.ok) {
+      const data = asRecord(parsed);
+      const msg =
+        typeof data.error === "string"
+          ? data.error
+          : typeof data.message === "string"
+            ? data.message
+            : `${response.status} ${response.statusText}`;
+      throw new Error(msg);
+    }
+    const data = asRecord(parsed);
+    const project = asRecord(data.project);
+    return {
+      projectId:
+        typeof data.projectId === "string"
+          ? data.projectId
+          : typeof project.id === "string"
+            ? project.id
+            : "",
+      project: project as unknown as ProjectRecord,
+      importedRuns:
+        typeof data.importedRuns === "number" ? data.importedRuns : 0,
+      importedApprovals:
+        typeof data.importedApprovals === "number"
+          ? data.importedApprovals
+          : 0,
+      importedOperations:
+        typeof data.importedOperations === "number"
+          ? data.importedOperations
+          : 0,
+      unimportedRenders:
+        typeof data.unimportedRenders === "number"
+          ? data.unimportedRenders
+          : 0
+    };
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 export async function listApprovals(filter?: {
   projectId?: string;
   status?: "pending" | "approved" | "rejected";

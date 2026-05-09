@@ -64,6 +64,10 @@ export interface DashboardContextValue {
   // Project actions
   handleCreateProject: (name: string) => Promise<void>;
   handleSelectProject: (id: string) => Promise<void>;
+  handleExportProject: () => Promise<void>;
+  handleImportProject: (bundle: object) => Promise<void>;
+  exportingProject: boolean;
+  importingProject: boolean;
 
   // Sidecar
   health: ApiStatus | null;
