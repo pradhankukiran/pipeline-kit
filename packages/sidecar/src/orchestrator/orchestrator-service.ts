@@ -317,6 +317,54 @@ export class OrchestratorService {
   }
 
   /**
+   * Publishes a `step.progress` event for a still-running step. Used by the
+   * sidecar's `POST /blender/progress` route so bpy-side handlers can push
+   * back-channel progress updates while the foreground socket call is still
+   * blocked waiting for the final NUL-terminated JSON envelope.
+   *
+   * Best-effort fire-and-forget: a buggy or absent event sink must not break
+   * the route. Errors are logged to stderr and swallowed so downstream HTTP
+   * handlers can return 204.
+   */
+  publishStepProgress(
+    runId: string,
+    stepId: string,
+    payload: { readonly message?: string; readonly percent?: number; readonly data?: unknown }
+  ): void {
+    const sink = this.eventSink;
+    if (!sink) {
+      return;
+    }
+    try {
+      const event: Parameters<PipelineEventSink["publish"]>[0] = {
+        type: "step.progress",
+        pipelineId: runId,
+        stepId,
+        ...(typeof payload.message === "string" ? { message: payload.message } : {}),
+        ...(typeof payload.percent === "number" && Number.isFinite(payload.percent)
+          ? { percent: payload.percent }
+          : {}),
+        ...(payload.data !== undefined ? { data: payload.data } : {}),
+        emittedAt: new Date().toISOString()
+      };
+      const maybe = sink.publish(event);
+      if (maybe && typeof (maybe as Promise<void>).then === "function") {
+        void (maybe as Promise<void>).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          process.stderr.write(
+            `[pipelinekit-sidecar] publishStepProgress sink rejected: ${message}\n`
+          );
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `[pipelinekit-sidecar] publishStepProgress threw synchronously: ${message}\n`
+      );
+    }
+  }
+
+  /**
    * Cancels a still-running async pipeline run. Returns:
    *   - `"not-found"` if no run record exists for `runId`.
    *   - `"already-terminal"` if the run record's status is not `"running"`
