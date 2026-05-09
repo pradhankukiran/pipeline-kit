@@ -266,6 +266,26 @@ export async function createSidecarDevServer(): Promise<SidecarDevServerHandle> 
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/blender/progress") {
+        let body: unknown;
+        try {
+          body = await readJsonBody(request);
+        } catch (parseError) {
+          const message = parseError instanceof Error ? parseError.message : String(parseError);
+          writeJson(response, 400, { ok: false, error: `Invalid JSON body: ${message}` });
+          return;
+        }
+        const parsed = parseProgressBody(body);
+        if (parsed.kind === "error") {
+          writeJson(response, 400, { ok: false, error: parsed.message });
+          return;
+        }
+        orchestratorService.publishStepProgress(parsed.runId, parsed.stepId, parsed.payload);
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/blender/operation") {
         const body = await readJsonBody(request);
         const operation = parseOperationRequest(body);
@@ -953,6 +973,84 @@ function readPromptFromBody(body: unknown): string | undefined {
     return body["prompt"];
   }
   return undefined;
+}
+
+interface ProgressBodyOk {
+  readonly kind: "ok";
+  readonly runId: string;
+  readonly stepId: string;
+  readonly payload: { message?: string; percent?: number; data?: unknown };
+}
+
+interface ProgressBodyError {
+  readonly kind: "error";
+  readonly message: string;
+}
+
+type ProgressBodyResult = ProgressBodyOk | ProgressBodyError;
+
+const PROGRESS_MESSAGE_MAX_BYTES = 1024;
+
+/**
+ * Validates the body for `POST /blender/progress`. Rejects anything that
+ * doesn't carry a non-empty string `runId` and `stepId`. `percent` is optional
+ * but must be a finite number in [0, 100] when present. `message` is optional
+ * but must be a string of at most 1KB. `data` is optional but must be
+ * JSON-serializable (we only check that it's not undefined and that
+ * JSON.stringify succeeds).
+ */
+function parseProgressBody(body: unknown): ProgressBodyResult {
+  if (!isRecord(body)) {
+    return { kind: "error", message: "Expected a JSON object." };
+  }
+  const runId = body["runId"];
+  if (typeof runId !== "string" || runId.length === 0) {
+    return { kind: "error", message: "Expected `runId` to be a non-empty string." };
+  }
+  const stepId = body["stepId"];
+  if (typeof stepId !== "string" || stepId.length === 0) {
+    return { kind: "error", message: "Expected `stepId` to be a non-empty string." };
+  }
+
+  const payload: { message?: string; percent?: number; data?: unknown } = {};
+
+  if (body["message"] !== undefined) {
+    const message = body["message"];
+    if (typeof message !== "string") {
+      return { kind: "error", message: "Expected `message` to be a string." };
+    }
+    if (Buffer.from(message).length > PROGRESS_MESSAGE_MAX_BYTES) {
+      return {
+        kind: "error",
+        message: `Expected \`message\` to be at most ${PROGRESS_MESSAGE_MAX_BYTES} bytes.`
+      };
+    }
+    payload.message = message;
+  }
+
+  if (body["percent"] !== undefined) {
+    const percent = body["percent"];
+    if (typeof percent !== "number" || !Number.isFinite(percent)) {
+      return { kind: "error", message: "Expected `percent` to be a finite number." };
+    }
+    if (percent < 0 || percent > 100) {
+      return { kind: "error", message: "Expected `percent` to be between 0 and 100." };
+    }
+    payload.percent = percent;
+  }
+
+  if (body["data"] !== undefined) {
+    const data = body["data"];
+    try {
+      JSON.stringify(data);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { kind: "error", message: `Expected \`data\` to be JSON-serializable: ${message}` };
+    }
+    payload.data = data;
+  }
+
+  return { kind: "ok", runId, stepId, payload };
 }
 
 function parseOperationRequest(body: unknown): JsonOperation {
