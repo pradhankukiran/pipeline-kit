@@ -111,6 +111,23 @@ export type RenderShotOperation = OperationBase<
     shotId: ID;
     quality: "preview" | "review" | "final";
     outputPath: string;
+    /**
+     * When true, render every frame in the scene's frame range instead of just
+     * the current still. Defaults to false. Codegen swaps `write_still=True` for
+     * `animation=True` and writes one image per frame.
+     */
+    animation?: boolean;
+    /**
+     * Optional override for `bpy.context.scene.frame_start`. Positive integer.
+     * When omitted at codegen time the scene's existing `frame_start` is used.
+     */
+    frameStart?: number;
+    /**
+     * Optional override for `bpy.context.scene.frame_end`. Positive integer.
+     * When omitted at codegen time the scene's existing `frame_end` is used.
+     * Must be >= `frameStart` when both are supplied.
+     */
+    frameEnd?: number;
   }
 >;
 

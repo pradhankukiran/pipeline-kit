@@ -82,11 +82,25 @@ export const createCameraRigParamsSchema = z.object({
   targetObject: z.string().min(1).max(120).optional()
 });
 
-export const renderShotParamsSchema = z.object({
-  shotId: z.string().min(1),
-  quality: z.enum(["preview", "review", "final"]),
-  outputPath: z.string().min(1)
-});
+export const renderShotParamsSchema = z
+  .object({
+    shotId: z.string().min(1),
+    quality: z.enum(["preview", "review", "final"]),
+    outputPath: z.string().min(1),
+    animation: z.boolean().optional(),
+    frameStart: z.number().int().min(1).max(1000000).optional(),
+    frameEnd: z.number().int().min(1).max(1000000).optional()
+  })
+  .refine(
+    (params) =>
+      params.frameStart === undefined ||
+      params.frameEnd === undefined ||
+      params.frameEnd >= params.frameStart,
+    {
+      message: "frameEnd must be greater than or equal to frameStart.",
+      path: ["frameEnd"]
+    }
+  );
 
 export const inspectSceneParamsSchema = z.object({
   includeObjects: z.boolean(),
