@@ -261,12 +261,33 @@ print(json.dumps({"operation": operation["type"], "report": report}, sort_keys=T
 }
 
 function scriptForSaveCheckpoint(operation: SaveCheckpointOperation): string {
+  // Path policy:
+  //   - If a .blend is open, save next to it via Blender's "//"-relative path
+  //     (preserves the historical layout).
+  //   - If no .blend is open, "//" resolves to Blender's cwd which may be
+  //     unwritable. Fall back to an absolute path under
+  //     ~/.pipelinekit/checkpoints/<label>.blend so the checkpoint always has
+  //     a writable home, regardless of how Blender was launched.
+  // The resolved absolute path is echoed back in the JSON envelope so callers
+  // (and downstream artifact consumers) can locate the saved file. When
+  // includeBlendFile=false we still emit the label and resolved path but do
+  // not write to disk — semantics unchanged from before.
   return wrapScript(operation, String.raw`
+import os as _pk_os
 label = slug(params["label"])
-path = f"//pipelinekit_checkpoint_{label}.blend"
+_pk_blend_filepath = bpy.data.filepath if hasattr(bpy.data, "filepath") else ""
+if _pk_blend_filepath:
+    relative_path = f"//pipelinekit_checkpoint_{label}.blend"
+    absolute_path = bpy.path.abspath(relative_path) if hasattr(bpy.path, "abspath") else relative_path
+    save_target = relative_path
+else:
+    fallback_dir = _pk_os.path.expanduser("~/.pipelinekit/checkpoints")
+    _pk_os.makedirs(fallback_dir, exist_ok=True)
+    absolute_path = _pk_os.path.join(fallback_dir, f"{label}.blend")
+    save_target = absolute_path
 if params["includeBlendFile"]:
-    bpy.ops.wm.save_as_mainfile(filepath=path)
-print(json.dumps({"operation": operation["type"], "label": params["label"], "path": path, "saved": params["includeBlendFile"]}))
+    bpy.ops.wm.save_as_mainfile(filepath=save_target)
+print(json.dumps({"operation": operation["type"], "label": params["label"], "path": save_target, "absolutePath": absolute_path, "saved": params["includeBlendFile"]}))
 `);
 }
 
@@ -634,9 +655,17 @@ function artifactsForOperation(
   }
 
   if (operation.type === "save_checkpoint" && operation.params.includeBlendFile) {
+    // Prefer the absolute path echoed by the Python helper (it accounts for
+    // the no-open-blend fallback under ~/.pipelinekit/checkpoints). Fall back
+    // to the Blender-relative path so legacy callers still see a usable hint.
+    const checkpoint = readCheckpointEnvelope(mcpResult.output);
+    const path =
+      checkpoint?.absolutePath ??
+      checkpoint?.path ??
+      `//pipelinekit_checkpoint_${slugForBlenderPath(operation.params.label)}.blend`;
     artifacts.push({
       kind: "blend_file",
-      path: `//pipelinekit_checkpoint_${slugForBlenderPath(operation.params.label)}.blend`
+      path
     });
   }
 
@@ -662,6 +691,26 @@ function readRenderOutputPath(output: unknown): string | undefined {
     return envelope["outputPath"];
   }
   return undefined;
+}
+
+/**
+ * Reads the save_checkpoint Python envelope. The script always emits both the
+ * Blender-side `path` (which may be a `//`-relative form) and the resolved
+ * `absolutePath`. Returns `undefined` if no parseable envelope is present.
+ */
+function readCheckpointEnvelope(
+  output: unknown
+): { readonly path?: string; readonly absolutePath?: string } | undefined {
+  const envelope = readRenderEnvelope(output);
+  if (!envelope) {
+    return undefined;
+  }
+  return {
+    ...(typeof envelope["path"] === "string" ? { path: envelope["path"] } : {}),
+    ...(typeof envelope["absolutePath"] === "string"
+      ? { absolutePath: envelope["absolutePath"] }
+      : {})
+  };
 }
 
 /**
