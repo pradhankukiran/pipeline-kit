@@ -10,4 +10,4 @@ Terminal=false
 Type=Application
 StartupWMClass={{name}}
 StartupNotify=true
-MimeType=application/json;
+MimeType=application/json;x-scheme-handler/pipelinekit;

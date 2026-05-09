@@ -83,6 +83,14 @@
         "https://github.com/pradhankukiran/pipeline-kit/releases/latest/download/latest.json"
       ],
       "windows": { "installMode": "passive" }
+    },
+    "deep-link": {
+      "mobile": [
+        { "host": "pipelinekit.dev", "pathPrefix": ["/"] }
+      ],
+      "desktop": {
+        "schemes": ["pipelinekit"]
+      }
     }
   }
 }
