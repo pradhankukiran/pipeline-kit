@@ -209,7 +209,10 @@ function scriptForCreateCameraRig(operation: CreateCameraRigOperation): string {
   const cameraMove = operation.params.cameraMove ?? "static";
   const recipeBody = emitTurntableOrbit({
     focalLength: operation.params.focalLength,
-    cameraMove
+    cameraMove,
+    // Optional Blender object name to aim the camera at. Resolution happens
+    // at runtime so a missing object falls back to world origin.
+    targetObject: operation.params.targetObject
   });
 
   // Resolution still derives from outputAspect for downstream renders.
