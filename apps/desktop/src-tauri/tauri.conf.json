@@ -58,6 +58,16 @@
       "wix": {
         "language": "en-US"
       }
+    },
+    "linux": {
+      "deb": {
+        "section": "graphics",
+        "depends": ["nodejs"],
+        "desktopTemplate": "desktop-template.desktop"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
     }
   }
 }
