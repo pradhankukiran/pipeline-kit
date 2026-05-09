@@ -7,7 +7,7 @@
 //! sidecar stays in charge. The child is killed when the last window closes.
 
 use std::fs::OpenOptions;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -23,12 +23,28 @@ const SIDECAR_RESOURCE: &str = "resources/pipelinekit-sidecar.cjs";
 /// Tauri-managed state holding the running sidecar child, if any.
 struct SidecarHandle(Mutex<Option<CommandChild>>);
 
-fn is_port_in_use(port: u16) -> bool {
+fn is_pipelinekit_sidecar_listening(port: u16) -> bool {
     let addr: SocketAddr = match format!("127.0.0.1:{port}").parse() {
         Ok(a) => a,
         Err(_) => return false,
     };
-    TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok()
+    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_millis(150)) {
+        Ok(stream) => stream,
+        Err(_) => return false,
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    if stream
+        .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).is_ok()
+        && response.contains("\"service\"")
+        && response.contains("pipelinekit-sidecar")
 }
 
 fn log_dir() -> PathBuf {
@@ -44,9 +60,9 @@ fn append_log(path: &PathBuf, line: &str) {
 }
 
 fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
-    if is_port_in_use(SIDECAR_PORT) {
+    if is_pipelinekit_sidecar_listening(SIDECAR_PORT) {
         eprintln!(
-            "[pipelinekit] sidecar already listening on :{SIDECAR_PORT}, skipping spawn"
+            "[pipelinekit] PipelineKit sidecar already listening on :{SIDECAR_PORT}, skipping spawn"
         );
         return Ok(());
     }
