@@ -1,4 +1,6 @@
+import { readdir, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { join } from "node:path";
 import { searchAssets, type AssetSearchRequest } from "@pipelinekit/assets";
 import {
   createWaterBottleProductVizDemoOperations,
@@ -15,6 +17,7 @@ import { ServerEventBroker, createRunIdFilter } from "./events.js";
 import { handleRenderRequest } from "./render-handler.js";
 import { handleAssetImport } from "./asset-import-handler.js";
 import { handleSceneInfo } from "./scene-info-handler.js";
+import { getRenderDir } from "./render-store.js";
 import {
   addApproval,
   addProject,
@@ -26,6 +29,7 @@ import {
   updateProject,
   updateSettings,
   type JsonOperation,
+  type PipelineRunRecord,
   type SidecarState
 } from "./state.js";
 
@@ -46,6 +50,7 @@ declare module "node:fs/promises" {
     path: string,
     options: { withFileTypes: true }
   ): Promise<Dirent[]>;
+  export function readdir(path: string): Promise<string[]>;
   export function stat(path: string): Promise<Stats>;
 }
 
@@ -487,6 +492,44 @@ export async function createSidecarDevServer(): Promise<SidecarDevServerHandle> 
           ok: true,
           activeProjectId: state.activeProjectId
         });
+        return;
+      }
+
+      const projectExportMatch = url.pathname.match(/^\/projects\/([^/]+)\/export$/);
+      if (projectExportMatch && request.method === "GET") {
+        const projectId = decodeURIComponent(projectExportMatch[1]);
+        const project = state.projects.find((entry) => entry.id === projectId);
+        if (!project) {
+          writeJson(response, 404, { ok: false, error: "Project not found." });
+          return;
+        }
+
+        const approvals = state.approvals.filter((entry) => entry.projectId === projectId);
+        const runs = state.pipelineRuns.filter((run) => run.projectId === projectId);
+        const operations = state.recentOperations.filter(
+          (entry) => (entry.projectId ?? null) === projectId
+        );
+        const renderPaths = await collectRenderPathsForRuns(runs);
+
+        const exportPayload = {
+          schemaVersion: 1,
+          exportedAt: new Date().toISOString(),
+          project,
+          approvals,
+          runs,
+          operations,
+          renderPaths
+        };
+
+        const safeName = sanitizeProjectFileName(project.name);
+        const dateSlug = new Date().toISOString().slice(0, 10);
+        const filename = `pipelinekit-project-${safeName}-${dateSlug}.json`;
+
+        response.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${filename}"`
+        });
+        response.end(JSON.stringify(exportPayload, null, 2));
         return;
       }
 
@@ -946,4 +989,65 @@ function readPort(): number {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Sanitises a project name into the `[A-Za-z0-9_-]+` charset for use in a
+ * `Content-Disposition` filename. Empty input becomes `project` so the
+ * download still has a sensible default name.
+ */
+function sanitizeProjectFileName(name: string): string {
+  const cleaned = name.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned.length > 0 ? cleaned : "project";
+}
+
+/**
+ * Returns the absolute paths of every PNG that lives under
+ * `<renderDir>/<runId>/` for the supplied runs. Missing run directories are
+ * silently skipped so a partial export still works after a render-dir cleanup.
+ * Other I/O errors are logged and the corresponding directory is skipped to
+ * keep the export response best-effort.
+ */
+async function collectRenderPathsForRuns(
+  runs: readonly PipelineRunRecord[]
+): Promise<string[]> {
+  const renderDir = getRenderDir();
+  const collected: string[] = [];
+
+  for (const run of runs) {
+    if (typeof run.id !== "string" || run.id.length === 0) {
+      continue;
+    }
+
+    const runDir = join(renderDir, run.id);
+    let entries: string[];
+    try {
+      entries = await readdir(runDir);
+    } catch (error) {
+      if (!isFileNotFound(error)) {
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(
+          `[pipelinekit-sidecar] failed to scan render dir ${runDir}: ${message}\n`
+        );
+      }
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.toLowerCase().endsWith(".png")) {
+        continue;
+      }
+      collected.push(join(runDir, entry));
+    }
+  }
+
+  return collected;
+}
+
+function isFileNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: string }).code === "ENOENT"
+  );
 }
