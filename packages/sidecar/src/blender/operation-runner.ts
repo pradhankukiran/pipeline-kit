@@ -204,10 +204,12 @@ print(json.dumps({"operation": operation["type"], "preset": ${JSON.stringify(ope
 }
 
 function scriptForCreateCameraRig(operation: CreateCameraRigOperation): string {
-  const animate = operation.params.cameraMove === "orbit";
+  // Honor every value of the cameraMove Zod enum (static / orbit / dolly /
+  // push_in). Default to "static" when unset.
+  const cameraMove = operation.params.cameraMove ?? "static";
   const recipeBody = emitTurntableOrbit({
     focalLength: operation.params.focalLength,
-    animate
+    cameraMove
   });
 
   // Resolution still derives from outputAspect for downstream renders.

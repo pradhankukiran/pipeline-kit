@@ -35,6 +35,8 @@ export interface SoftboxThreePointParams {
   readonly colorTemperature?: number;
 }
 
+export type CameraMove = "static" | "orbit" | "dolly" | "push_in";
+
 export interface TurntableOrbitParams {
   /** Camera focal length, mm. Default 50. */
   readonly focalLength?: number;
@@ -42,8 +44,23 @@ export interface TurntableOrbitParams {
   readonly radius?: number;
   /** Camera height, metres. Default 1.5. */
   readonly height?: number;
-  /** Add a 100-frame Z-axis orbit animation. Default false. */
+  /**
+   * Add a 100-frame Z-axis orbit animation. Equivalent to passing
+   * `cameraMove: "orbit"`. Kept for backwards compatibility — newer callers
+   * should pass `cameraMove` directly.
+   */
   readonly animate?: boolean;
+  /**
+   * Camera animation kind. Defaults to "orbit" when `animate` is true and
+   * "static" otherwise.
+   */
+  readonly cameraMove?: CameraMove;
+  /**
+   * Optional Blender object name to track. The camera will look at the
+   * object's world location each frame. Falls back to world origin if the
+   * object is missing at runtime.
+   */
+  readonly targetObject?: string;
 }
 
 export interface MatteClayParams {
@@ -297,9 +314,13 @@ export function emitTurntableOrbit(params: TurntableOrbitParams = {}): string {
   const focal = params.focalLength ?? 50;
   const radius = params.radius ?? 5;
   const height = params.height ?? 1.5;
-  const animate = params.animate ?? false;
 
-  return `# PipelineKit recipe: camera-rig:turntable-orbit
+  // Resolve cameraMove: explicit > legacy animate flag > "static".
+  const cameraMove: CameraMove = params.cameraMove ?? (params.animate ? "orbit" : "static");
+  const targetObject = params.targetObject;
+
+  // Common scene-camera setup used by every move type.
+  const cameraSetup = `# PipelineKit recipe: camera-rig:turntable-orbit
 import math as _pk_math
 import mathutils as _pk_mu
 _pk_remove_object("PK_camera")
@@ -307,33 +328,118 @@ _pk_cam_data = bpy.data.cameras.new(name="PK_camera_data")
 _pk_cam_data.lens = ${pyFloat(focal)}
 _pk_cam_obj = bpy.data.objects.new("PK_camera", _pk_cam_data)
 _pk_cam_obj.location = (0.0, ${pyFloat(-radius)}, ${pyFloat(height)})
-_pk_target = _pk_mu.Vector((0.0, 0.0, 0.0))
+${targetObject ? `_pk_target_object_name = ${pyStr(targetObject)}` : `_pk_target_object_name = None`}
+
+def _pk_resolve_target():
+    if _pk_target_object_name is not None:
+        _pk_t_obj = bpy.data.objects.get(_pk_target_object_name)
+        if _pk_t_obj is not None:
+            loc = _pk_t_obj.matrix_world.translation
+            return _pk_mu.Vector((loc.x, loc.y, loc.z))
+    return _pk_mu.Vector((0.0, 0.0, 0.0))
+
+_pk_target = _pk_resolve_target()
 _pk_dir = _pk_target - _pk_cam_obj.location
 _pk_cam_obj.rotation_euler = _pk_dir.to_track_quat("-Z", "Y").to_euler()
 _pk_link(_pk_cam_obj)
 bpy.context.scene.camera = _pk_cam_obj
-
-if ${pyBool(animate)}:
-    bpy.context.scene.frame_start = 1
-    bpy.context.scene.frame_end = 100
-    _pk_steps = 100
-    _pk_radius = ${pyFloat(radius)}
-    _pk_height = ${pyFloat(height)}
-    for _pk_i in range(_pk_steps + 1):
-        _pk_t = _pk_i / _pk_steps
-        _pk_angle = _pk_t * 2.0 * _pk_math.pi
-        _pk_cam_obj.location = (
-            _pk_radius * _pk_math.sin(_pk_angle),
-            -_pk_radius * _pk_math.cos(_pk_angle),
-            _pk_height,
-        )
-        _pk_dir = _pk_target - _pk_cam_obj.location
-        _pk_cam_obj.rotation_euler = _pk_dir.to_track_quat("-Z", "Y").to_euler()
-        bpy.context.scene.frame_set(_pk_i + 1)
-        _pk_cam_obj.keyframe_insert(data_path="location", frame=_pk_i + 1)
-        _pk_cam_obj.keyframe_insert(data_path="rotation_euler", frame=_pk_i + 1)
-    bpy.context.scene.frame_set(1)
 `;
+
+  // Mode-specific animation block. All animated modes use 100 frames and
+  // recompute the target each frame so a moving subject is followed.
+  const animationBody = emitCameraMoveAnimation(cameraMove, radius, height);
+
+  return `${cameraSetup}\n${animationBody}`;
+}
+
+/**
+ * Emit the mode-specific animation block for the camera rig. Assumes
+ * `_pk_cam_obj`, `_pk_resolve_target`, `_pk_math`, and `_pk_mu` are already
+ * defined by the caller (see `emitTurntableOrbit`).
+ */
+function emitCameraMoveAnimation(
+  cameraMove: CameraMove,
+  radius: number,
+  height: number
+): string {
+  switch (cameraMove) {
+    case "static":
+      return `# camera move: static (no animation)\n`;
+    case "orbit":
+      return `# camera move: orbit
+bpy.context.scene.frame_start = 1
+bpy.context.scene.frame_end = 100
+_pk_steps = 100
+_pk_radius = ${pyFloat(radius)}
+_pk_height = ${pyFloat(height)}
+for _pk_i in range(_pk_steps + 1):
+    _pk_t = _pk_i / _pk_steps
+    _pk_angle = _pk_t * 2.0 * _pk_math.pi
+    _pk_cam_obj.location = (
+        _pk_radius * _pk_math.sin(_pk_angle),
+        -_pk_radius * _pk_math.cos(_pk_angle),
+        _pk_height,
+    )
+    _pk_target = _pk_resolve_target()
+    _pk_dir = _pk_target - _pk_cam_obj.location
+    _pk_cam_obj.rotation_euler = _pk_dir.to_track_quat("-Z", "Y").to_euler()
+    bpy.context.scene.frame_set(_pk_i + 1)
+    _pk_cam_obj.keyframe_insert(data_path="location", frame=_pk_i + 1)
+    _pk_cam_obj.keyframe_insert(data_path="rotation_euler", frame=_pk_i + 1)
+bpy.context.scene.frame_set(1)
+`;
+    case "dolly":
+      return `# camera move: dolly (sideways slide x=-3 -> x=+3)
+bpy.context.scene.frame_start = 1
+bpy.context.scene.frame_end = 100
+_pk_steps = 100
+_pk_radius = ${pyFloat(radius)}
+_pk_height = ${pyFloat(height)}
+_pk_dolly_start = -3.0
+_pk_dolly_end = 3.0
+for _pk_i in range(_pk_steps + 1):
+    _pk_t = _pk_i / _pk_steps
+    _pk_x = _pk_dolly_start + (_pk_dolly_end - _pk_dolly_start) * _pk_t
+    _pk_cam_obj.location = (
+        _pk_x,
+        -_pk_radius,
+        _pk_height,
+    )
+    _pk_target = _pk_resolve_target()
+    _pk_dir = _pk_target - _pk_cam_obj.location
+    _pk_cam_obj.rotation_euler = _pk_dir.to_track_quat("-Z", "Y").to_euler()
+    bpy.context.scene.frame_set(_pk_i + 1)
+    _pk_cam_obj.keyframe_insert(data_path="location", frame=_pk_i + 1)
+    _pk_cam_obj.keyframe_insert(data_path="rotation_euler", frame=_pk_i + 1)
+bpy.context.scene.frame_set(1)
+`;
+    case "push_in":
+      return `# camera move: push_in (radial: radius -> radius * 0.5)
+bpy.context.scene.frame_start = 1
+bpy.context.scene.frame_end = 100
+_pk_steps = 100
+_pk_radius_start = ${pyFloat(radius)}
+_pk_radius_end = ${pyFloat(radius * 0.5)}
+_pk_height = ${pyFloat(height)}
+for _pk_i in range(_pk_steps + 1):
+    _pk_t = _pk_i / _pk_steps
+    _pk_r = _pk_radius_start + (_pk_radius_end - _pk_radius_start) * _pk_t
+    _pk_target = _pk_resolve_target()
+    # Direction from current target toward initial camera origin (0, -1, 0)
+    # in XY; we keep the camera on the negative-Y axis and move in along it.
+    _pk_cam_obj.location = (
+        _pk_target.x,
+        _pk_target.y - _pk_r,
+        _pk_height,
+    )
+    _pk_dir = _pk_target - _pk_cam_obj.location
+    _pk_cam_obj.rotation_euler = _pk_dir.to_track_quat("-Z", "Y").to_euler()
+    bpy.context.scene.frame_set(_pk_i + 1)
+    _pk_cam_obj.keyframe_insert(data_path="location", frame=_pk_i + 1)
+    _pk_cam_obj.keyframe_insert(data_path="rotation_euler", frame=_pk_i + 1)
+bpy.context.scene.frame_set(1)
+`;
+  }
 }
 
 export function emitMatteClay(params: MatteClayParams = {}): string {
