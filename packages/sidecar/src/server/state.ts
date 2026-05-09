@@ -48,7 +48,12 @@ export interface RecentOperation {
   readonly projectId?: ID | null;
 }
 
-export type PipelineRunStatus = "running" | "completed" | "failed" | "rejected";
+export type PipelineRunStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "rejected"
+  | "cancelled";
 
 export interface PipelineRunRecord {
   readonly id: ID;
@@ -498,7 +503,8 @@ function sanitizePipelineRuns(
       rawStatus === "running" ||
       rawStatus === "completed" ||
       rawStatus === "failed" ||
-      rawStatus === "rejected"
+      rawStatus === "rejected" ||
+      rawStatus === "cancelled"
         ? rawStatus
         : inferStatusFromLegacyRecord(item["results"], completedAt);
 

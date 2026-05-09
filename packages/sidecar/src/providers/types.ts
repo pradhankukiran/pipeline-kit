@@ -36,6 +36,15 @@ export interface PipelineStepContext {
   readonly input: PipelineInput;
   readonly step: PipelineStep;
   readonly priorOutputs: ReadonlyMap<string, unknown>;
+  /**
+   * Optional `AbortSignal` propagated by the orchestrator. The orchestrator
+   * itself stops dispatching new steps when this fires; cooperative executors
+   * (e.g. ones that poll an external service) may also short-circuit by
+   * checking `signal?.aborted` directly. Already-running Blender ops are not
+   * interrupted — the signal's purpose is to prevent further work, not to kill
+   * in-flight bpy execution.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface PipelineStepExecutor {

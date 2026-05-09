@@ -47,6 +47,8 @@ export interface OrchestratorAsyncSubmission {
   readonly runId: string;
 }
 
+export type CancelRunResult = "cancelled" | "not-found" | "already-terminal";
+
 /**
  * Constructs `PipelineOrchestrator`s for each run, wiring lane executors based
  * on the live `SidecarState` (settings can change between runs) and the shared
@@ -57,6 +59,12 @@ export class OrchestratorService {
   private readonly state: SidecarState;
   private readonly blender: BlenderOperationAdapter;
   private readonly eventSink?: PipelineEventSink;
+  /**
+   * Per-runId AbortControllers for in-flight async runs. Entries are added
+   * inside `runPipelineAsync` and removed in the orchestrator promise's
+   * `finally`. `cancelRun` aborts the controller and updates the run record.
+   */
+  private readonly runControllers = new Map<string, AbortController>();
 
   constructor(options: OrchestratorServiceOptions) {
     this.state = options.state;
@@ -137,11 +145,22 @@ export class OrchestratorService {
       executors
     });
 
+    const controller = new AbortController();
+    this.runControllers.set(runId, controller);
+
     void orchestrator
-      .run(enrichedDefinition)
+      .run(enrichedDefinition, { signal: controller.signal })
       .then((results) => {
         this.recordBlenderResults(results, projectId);
-        const status = deriveRunStatus(results);
+        // If `cancelRun` already wrote a `cancelled` status for this run we
+        // must not clobber it with a derived status — a cancelled run has
+        // already been written to disk.
+        const existing = this.state.pipelineRuns.find((run) => run.id === runId);
+        if (existing?.status === "cancelled") {
+          updatePipelineRun(this.state, runId, { results });
+          return;
+        }
+        const status = deriveRunStatus(results, controller.signal.aborted);
         updatePipelineRun(this.state, runId, {
           status,
           completedAt: new Date().toISOString(),
@@ -164,9 +183,54 @@ export class OrchestratorService {
         process.stderr.write(
           `[pipelinekit-sidecar] pipeline run ${runId} threw: ${message}\n`
         );
+      })
+      .finally(() => {
+        this.runControllers.delete(runId);
       });
 
     return { runId };
+  }
+
+  /**
+   * Cancels a still-running async pipeline run. Returns:
+   *   - `"not-found"` if no run record exists for `runId`.
+   *   - `"already-terminal"` if the run record's status is not `"running"`
+   *     (or if the controller has already been removed from the map, e.g. the
+   *     run resolved between the lookup and this call).
+   *   - `"cancelled"` after the controller is aborted and the run record is
+   *     patched to `status: "cancelled"`. The orchestrator finishes any
+   *     in-flight step naturally and emits `pipeline.cancelled` followed by
+   *     `cancelled` results for the rest.
+   *
+   * NOTE: a run waiting at the approval gate will not unblock until the gate
+   * decision lands or its timeout fires — the gate's `setTimeout` poll loop
+   * doesn't consume the signal. Once the gate resolves, the orchestrator's
+   * pre-dispatch abort check fires on the next tick and the remaining steps
+   * are marked cancelled. See `approval-gate.ts` for follow-up.
+   */
+  cancelRun(runId: string): CancelRunResult {
+    const existing = this.state.pipelineRuns.find((run) => run.id === runId);
+    if (!existing) {
+      return "not-found";
+    }
+    if (existing.status !== "running") {
+      return "already-terminal";
+    }
+
+    const controller = this.runControllers.get(runId);
+    if (!controller) {
+      // Record says running but no controller — likely a race with the
+      // orchestrator's `.finally`. Treat as already-terminal so callers retry
+      // their lookup if they need fresh state.
+      return "already-terminal";
+    }
+
+    controller.abort();
+    updatePipelineRun(this.state, runId, {
+      status: "cancelled",
+      completedAt: new Date().toISOString()
+    });
+    return "cancelled";
   }
 
   private buildExecutors(lanes: ReadonlySet<ProviderLane>): readonly PipelineStepExecutor[] {
@@ -358,15 +422,24 @@ function injectProjectIdIntoSteps(
 /**
  * Derives a terminal `PipelineRunStatus` from the orchestrator's results.
  *
+ * - `cancelled` if `aborted` is true OR any result has `status: "cancelled"`.
  * - `rejected` if any failed step's error starts with `"Step rejected:"`
  *   (the marker thrown by the approval gate).
  * - `failed` if any step failed for another reason.
  * - `completed` otherwise (including pure `succeeded` / `skipped` mixes).
  */
-function deriveRunStatus(results: readonly PipelineStepResult[]): PipelineRunStatus {
+function deriveRunStatus(
+  results: readonly PipelineStepResult[],
+  aborted = false
+): PipelineRunStatus {
   let anyFailed = false;
   let anyRejected = false;
+  let anyCancelled = aborted;
   for (const result of results) {
+    if (result.status === "cancelled") {
+      anyCancelled = true;
+      continue;
+    }
     if (result.status !== "failed") {
       continue;
     }
@@ -376,6 +449,9 @@ function deriveRunStatus(results: readonly PipelineStepResult[]): PipelineRunSta
     }
   }
 
+  if (anyCancelled) {
+    return "cancelled";
+  }
   if (anyRejected) {
     return "rejected";
   }

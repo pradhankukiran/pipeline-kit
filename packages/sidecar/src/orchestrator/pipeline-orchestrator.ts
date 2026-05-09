@@ -12,6 +12,25 @@ export interface PipelineOrchestratorOptions {
   readonly eventSink?: PipelineEventSink;
 }
 
+export interface PipelineOrchestratorRunOptions {
+  /**
+   * When provided, the orchestrator stops dispatching new steps after the
+   * signal aborts, marks every still-pending step as `cancelled`, and emits
+   * `pipeline.cancelled` (instead of `pipeline.completed`). In-flight steps
+   * resolve naturally — there is no safe way to interrupt a running bpy call
+   * mid-execution.
+   */
+  readonly signal?: AbortSignal;
+  /**
+   * Pre-seeded outputs for steps treated as already-completed. Keys are step
+   * IDs whose values become both the corresponding `priorOutputs` entry and
+   * the seeded `succeeded` step result. Used by `rerunPipelineFromStep` so a
+   * partial replay starts from a chosen step without re-running its
+   * predecessors.
+   */
+  readonly seededOutputs?: ReadonlyMap<string, unknown>;
+}
+
 export class PipelineOrchestrator {
   private readonly executors: ReadonlyMap<ProviderLane, PipelineStepExecutor>;
   private readonly eventSink?: PipelineEventSink;
@@ -21,16 +40,48 @@ export class PipelineOrchestrator {
     this.eventSink = options.eventSink;
   }
 
-  async run(definition: PipelineDefinition): Promise<readonly PipelineStepResult[]> {
+  async run(
+    definition: PipelineDefinition,
+    opts?: PipelineOrchestratorRunOptions
+  ): Promise<readonly PipelineStepResult[]> {
     const results: PipelineStepResult[] = [];
     const outputs = new Map<string, unknown>();
     const completed = new Set<string>();
     const failed = new Set<string>();
     const remaining = new Map(definition.steps.map((step) => [step.id, step]));
+    const signal = opts?.signal;
 
     await this.publish({ type: "pipeline.started", pipelineId: definition.id });
 
+    // Pre-seed outputs from a previous run — emit synthetic step.completed
+    // events so SSE consumers see a consistent stream and treat the seeded
+    // steps as having succeeded.
+    if (opts?.seededOutputs && opts.seededOutputs.size > 0) {
+      for (const step of definition.steps) {
+        if (!opts.seededOutputs.has(step.id)) {
+          continue;
+        }
+        const output = opts.seededOutputs.get(step.id);
+        const result: PipelineStepResult = {
+          stepId: step.id,
+          lane: step.lane,
+          status: "succeeded",
+          output,
+          summary: "Seeded from a previous run."
+        };
+        results.push(result);
+        outputs.set(step.id, output);
+        completed.add(step.id);
+        remaining.delete(step.id);
+        await this.publish({ type: "step.completed", pipelineId: definition.id, result });
+      }
+    }
+
     while (remaining.size > 0) {
+      if (signal?.aborted) {
+        return await this.cancelRemaining(definition, remaining, results);
+      }
+
       const runnable = [...remaining.values()].filter((step) =>
         this.dependenciesSatisfied(step, completed)
       );
@@ -40,9 +91,15 @@ export class PipelineOrchestrator {
       }
 
       for (const step of runnable) {
+        // Re-check before each dispatch — long-running steps may abort
+        // between scheduling decisions inside the same tick.
+        if (signal?.aborted) {
+          return await this.cancelRemaining(definition, remaining, results);
+        }
+
         const result = this.hasFailedDependency(step, failed)
           ? await this.skipStep(definition, step)
-          : await this.runStep(definition, step, outputs);
+          : await this.runStep(definition, step, outputs, signal);
         results.push(result);
         remaining.delete(step.id);
         completed.add(step.id);
@@ -67,7 +124,8 @@ export class PipelineOrchestrator {
   private async runStep(
     definition: PipelineDefinition,
     step: PipelineStep,
-    priorOutputs: ReadonlyMap<string, unknown>
+    priorOutputs: ReadonlyMap<string, unknown>,
+    signal: AbortSignal | undefined
   ): Promise<PipelineStepResult> {
     const executor = this.executors.get(step.lane);
     if (!executor) {
@@ -80,7 +138,8 @@ export class PipelineOrchestrator {
       const output = await executor.execute({
         input: definition.input,
         step,
-        priorOutputs
+        priorOutputs,
+        ...(signal ? { signal } : {})
       });
       const result: PipelineStepResult = {
         stepId: step.id,
@@ -114,6 +173,38 @@ export class PipelineOrchestrator {
     };
     await this.publish({ type: "step.completed", pipelineId: definition.id, result });
     return result;
+  }
+
+  /**
+   * Marks every still-pending step as `cancelled`, emits
+   * `pipeline.cancelled`, and returns the accumulated results so far. Called
+   * when the run's `AbortSignal` fires between scheduling ticks. Already-
+   * running step promises continue to resolve via `runStep` and their normal
+   * `step.completed` events (the cancellation only stops new dispatches).
+   */
+  private async cancelRemaining(
+    definition: PipelineDefinition,
+    remaining: ReadonlyMap<string, PipelineStep>,
+    results: PipelineStepResult[]
+  ): Promise<readonly PipelineStepResult[]> {
+    for (const step of remaining.values()) {
+      const result: PipelineStepResult = {
+        stepId: step.id,
+        lane: step.lane,
+        status: "cancelled",
+        summary: "Pipeline cancelled before this step ran."
+      };
+      results.push(result);
+      await this.publish({ type: "step.completed", pipelineId: definition.id, result });
+    }
+
+    await this.publish({
+      type: "pipeline.cancelled",
+      pipelineId: definition.id,
+      cancelledAt: new Date().toISOString()
+    });
+
+    return results;
   }
 
   private dependenciesSatisfied(step: PipelineStep, completed: ReadonlySet<string>): boolean {
