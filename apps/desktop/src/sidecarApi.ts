@@ -725,6 +725,31 @@ export type CancelPipelineRunResult =
   | { kind: "already-terminal" }
   | { kind: "error"; message: string };
 
+/**
+ * POST /pipeline/runs/:id/rerun → seeds priorOutputs and starts a fresh run
+ * from the given stepId. Returns the new runId on success, or `null` if the
+ * sidecar refused the request (e.g. unknown run, step not found).
+ */
+export async function rerunPipelineFromStep(
+  originalRunId: string,
+  fromStepId: string
+): Promise<{ runId: string } | null> {
+  const result = await requestJson<unknown>(
+    `/pipeline/runs/${encodeURIComponent(originalRunId)}/rerun`,
+    {
+      method: "POST",
+      body: JSON.stringify({ from: fromStepId })
+    }
+  );
+  if (!result.data) return null;
+  const data = asRecord(result.data);
+  const failure = readApiError(data);
+  if (failure) return null;
+  const runId = typeof data.runId === "string" ? data.runId : "";
+  if (!runId) return null;
+  return { runId };
+}
+
 export async function cancelPipelineRun(
   runId: string
 ): Promise<CancelPipelineRunResult> {

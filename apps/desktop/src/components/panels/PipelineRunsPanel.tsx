@@ -8,6 +8,7 @@ import {
   ListOrdered,
   MinusCircle,
   RefreshCw,
+  RotateCcw,
   XCircle
 } from "lucide-react";
 
@@ -31,6 +32,7 @@ import {
   cancelPipelineRun,
   getPipelineRun,
   listPipelineRuns,
+  rerunPipelineFromStep,
   type PipelineRunRecord,
   type PipelineRunStepResult
 } from "@/sidecarApi";
@@ -189,7 +191,19 @@ function StepStatusBadge({ status }: { status: PipelineRunStepResult["status"] }
   return <Badge variant="outline">{status}</Badge>;
 }
 
-function RunStepRow({ step }: { step: PipelineRunStepResult }) {
+function RunStepRow({
+  step,
+  rerunDisabled,
+  rerunBusy,
+  rerunDisabledReason,
+  onRerun
+}: {
+  step: PipelineRunStepResult;
+  rerunDisabled: boolean;
+  rerunBusy: boolean;
+  rerunDisabledReason: string | null;
+  onRerun: (stepId: string) => void;
+}) {
   const output = previewOutput(step.output);
   return (
     <div className="grid gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs">
@@ -201,6 +215,31 @@ function RunStepRow({ step }: { step: PipelineRunStepResult }) {
           {step.lane}
         </Badge>
         <StepStatusBadge status={step.status} />
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="ml-auto h-7 px-2 text-[11px]"
+          disabled={rerunDisabled}
+          title={rerunDisabledReason ?? "Rerun the pipeline from this step"}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onRerun(step.stepId);
+          }}
+        >
+          {rerunBusy ? (
+            <>
+              <Loader2 className="animate-spin" />
+              Rerunning…
+            </>
+          ) : (
+            <>
+              <RotateCcw />
+              Rerun from here
+            </>
+          )}
+        </Button>
       </div>
       {step.error ? (
         <p className="text-xs text-destructive break-words">{step.error}</p>
@@ -220,7 +259,9 @@ function RunRow({
   liveResults,
   liveProgress,
   cancelBusy,
-  onCancel
+  onCancel,
+  rerunBusyStepId,
+  onRerunStep
 }: {
   run: PipelineRunRecord;
   liveStatus: RunStatusLabel;
@@ -228,6 +269,8 @@ function RunRow({
   liveProgress: { current: number; running: boolean } | null;
   cancelBusy: boolean;
   onCancel: () => void;
+  rerunBusyStepId: string | null;
+  onRerunStep: (runId: string, stepId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const heading =
@@ -308,9 +351,38 @@ function RunRow({
           </span>
         ) : (
           <div className="grid gap-2">
-            {liveResults.map((step) => (
-              <RunStepRow key={step.stepId} step={step} />
-            ))}
+            {liveResults.map((step) => {
+              const hasOutput =
+                step.output !== undefined && step.output !== null;
+              const isRunning = liveStatus === "running";
+              const rerunDisabled =
+                isRunning ||
+                !hasOutput ||
+                step.status === "running" ||
+                step.status === "pending";
+              const rerunBusy = rerunBusyStepId === step.stepId;
+              let reason: string | null = null;
+              if (isRunning) {
+                reason = "Wait for the run to finish before rerunning";
+              } else if (!hasOutput) {
+                reason = "No recorded output to seed the rerun from";
+              } else if (
+                step.status === "running" ||
+                step.status === "pending"
+              ) {
+                reason = "Step has no terminal status to rerun from";
+              }
+              return (
+                <RunStepRow
+                  key={step.stepId}
+                  step={step}
+                  rerunDisabled={rerunDisabled || rerunBusy}
+                  rerunBusy={rerunBusy}
+                  rerunDisabledReason={reason}
+                  onRerun={(stepId) => onRerunStep(run.id, stepId)}
+                />
+              );
+            })}
           </div>
         )}
       </CollapsibleContent>
@@ -326,6 +398,11 @@ export function PipelineRunsPanel({
   const [runs, setRuns] = useState<PipelineRunRecord[]>([]);
   const [liveById, setLiveById] = useState<Record<string, RunLiveState>>({});
   const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set());
+  // Tracks which (runId, stepId) is currently submitting a rerun. Keyed by
+  // runId because only one step can rerun at a time per run.
+  const [rerunBusyByRun, setRerunBusyByRun] = useState<Record<string, string>>(
+    {}
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const hasLoadedRef = useRef(false);
@@ -572,6 +649,50 @@ export function PipelineRunsPanel({
     [load, refreshRun, setSubmitBanner]
   );
 
+  const handleRerunStep = useCallback(
+    async (originalRunId: string, fromStepId: string) => {
+      setRerunBusyByRun((current) => ({ ...current, [originalRunId]: fromStepId }));
+      try {
+        const result = await rerunPipelineFromStep(originalRunId, fromStepId);
+        if (!result) {
+          setSubmitBanner(
+            `Rerun failed for step ${fromStepId} — sidecar refused.`
+          );
+          return;
+        }
+        // Optimistically prepend a placeholder run for the new runId so the
+        // SSE wiring picks it up on the next list refresh; the polling
+        // interval will replace it with the canonical record shortly.
+        const placeholder: PipelineRunRecord = {
+          id: result.runId,
+          projectId: null,
+          definitionId: `rerun:${originalRunId.slice(0, 8)}`,
+          startedAt: new Date().toISOString(),
+          completedAt: "",
+          results: []
+        };
+        setRuns((current) => {
+          if (current.some((entry) => entry.id === result.runId)) {
+            return current;
+          }
+          return [placeholder, ...current];
+        });
+        setSubmitBanner(
+          `Rerun submitted from ${fromStepId} · new run ${result.runId.slice(0, 8)}`
+        );
+        void load(false);
+      } finally {
+        setRerunBusyByRun((current) => {
+          if (current[originalRunId] !== fromStepId) return current;
+          const { [originalRunId]: _omit, ...rest } = current;
+          void _omit;
+          return rest;
+        });
+      }
+    },
+    [load, setSubmitBanner]
+  );
+
   return (
     <Card className={cn("col-span-12 lg:col-span-7", className)} id="runs">
       <CardHeader className="flex-row items-start justify-between space-y-0 gap-4 pb-3">
@@ -646,6 +767,8 @@ export function PipelineRunsPanel({
                   liveProgress={liveProgress}
                   cancelBusy={cancellingIds.has(run.id)}
                   onCancel={() => void handleCancel(run.id)}
+                  rerunBusyStepId={rerunBusyByRun[run.id] ?? null}
+                  onRerunStep={(rid, sid) => void handleRerunStep(rid, sid)}
                 />
               );
             })
