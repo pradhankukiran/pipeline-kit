@@ -52,6 +52,11 @@ export type RunLiveState = {
   progress: { current: number; running: boolean } | null;
 };
 
+export type StepProgressState = {
+  message?: string;
+  percent?: number;
+};
+
 export interface PipelineRunsPanelProps {
   activeProjectId: string | null;
   className?: string;
@@ -193,18 +198,33 @@ function StepStatusBadge({ status }: { status: PipelineRunStepResult["status"] }
 
 function RunStepRow({
   step,
+  progress,
   rerunDisabled,
   rerunBusy,
   rerunDisabledReason,
   onRerun
 }: {
   step: PipelineRunStepResult;
+  progress: StepProgressState | null;
   rerunDisabled: boolean;
   rerunBusy: boolean;
   rerunDisabledReason: string | null;
   onRerun: (stepId: string) => void;
 }) {
   const output = previewOutput(step.output);
+  const showPercent =
+    progress &&
+    typeof progress.percent === "number" &&
+    Number.isFinite(progress.percent);
+  const clampedPercent = showPercent
+    ? Math.max(0, Math.min(100, Math.round(progress!.percent!)))
+    : null;
+  const showMessage =
+    progress &&
+    !showPercent &&
+    typeof progress.message === "string" &&
+    progress.message.trim().length > 0;
+
   return (
     <div className="grid gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs">
       <div className="flex flex-wrap items-center gap-2">
@@ -241,6 +261,35 @@ function RunStepRow({
           )}
         </Button>
       </div>
+      {showPercent ? (
+        <div className="flex items-center gap-2">
+          <div
+            className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={clampedPercent ?? undefined}
+          >
+            <div
+              className="h-full bg-sky-500 transition-all"
+              style={{ width: `${clampedPercent ?? 0}%` }}
+            />
+          </div>
+          <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
+            {clampedPercent}%
+          </span>
+          {progress?.message ? (
+            <span className="truncate text-[11px] text-muted-foreground">
+              {progress.message}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {showMessage ? (
+        <p className="line-clamp-1 text-[11px] text-muted-foreground">
+          {progress!.message}
+        </p>
+      ) : null}
       {step.error ? (
         <p className="text-xs text-destructive break-words">{step.error}</p>
       ) : null}
@@ -258,6 +307,7 @@ function RunRow({
   liveStatus,
   liveResults,
   liveProgress,
+  stepProgress,
   cancelBusy,
   onCancel,
   rerunBusyStepId,
@@ -267,6 +317,7 @@ function RunRow({
   liveStatus: RunStatusLabel;
   liveResults: PipelineRunStepResult[];
   liveProgress: { current: number; running: boolean } | null;
+  stepProgress: Record<string, StepProgressState>;
   cancelBusy: boolean;
   onCancel: () => void;
   rerunBusyStepId: string | null;
@@ -376,6 +427,7 @@ function RunRow({
                 <RunStepRow
                   key={step.stepId}
                   step={step}
+                  progress={stepProgress[step.stepId] ?? null}
                   rerunDisabled={rerunDisabled || rerunBusy}
                   rerunBusy={rerunBusy}
                   rerunDisabledReason={reason}
@@ -397,6 +449,11 @@ export function PipelineRunsPanel({
   const { setSubmitBanner } = useDashboard();
   const [runs, setRuns] = useState<PipelineRunRecord[]>([]);
   const [liveById, setLiveById] = useState<Record<string, RunLiveState>>({});
+  // Progress reported by `step.progress` SSE events, keyed by runId then
+  // stepId. Cleared on the next `step.completed` for the same step.
+  const [stepProgressByRun, setStepProgressByRun] = useState<
+    Record<string, Record<string, StepProgressState>>
+  >({});
   const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set());
   // Tracks which (runId, stepId) is currently submitting a rerun. Keyed by
   // runId because only one step can rerun at a time per run.
@@ -515,6 +572,25 @@ export function PipelineRunsPanel({
             };
           });
         },
+        onStepProgress: (event) => {
+          const stepId =
+            typeof event.stepId === "string" ? event.stepId : "";
+          if (!stepId) return;
+          setStepProgressByRun((current) => {
+            const forRun = current[run.id] ?? {};
+            const next: StepProgressState = {};
+            if (typeof event.message === "string") {
+              next.message = event.message;
+            }
+            if (typeof event.percent === "number") {
+              next.percent = event.percent;
+            }
+            return {
+              ...current,
+              [run.id]: { ...forRun, [stepId]: next }
+            };
+          });
+        },
         onStepCompleted: (event) => {
           const stepId =
             typeof event.result.stepId === "string"
@@ -526,6 +602,15 @@ export function PipelineRunsPanel({
             typeof event.result.lane === "string" ? event.result.lane : "";
           const status = (event.result.status ??
             "succeeded") as PipelineRunStepResult["status"];
+          // Clear any in-flight progress display for the step that just
+          // completed — its final status row replaces the bar/message.
+          setStepProgressByRun((current) => {
+            const forRun = current[run.id];
+            if (!forRun || !(stepId in forRun)) return current;
+            const { [stepId]: _omit, ...rest } = forRun;
+            void _omit;
+            return { ...current, [run.id]: rest };
+          });
           setLiveById((current) => {
             const prev =
               current[run.id] ??
@@ -564,6 +649,35 @@ export function PipelineRunsPanel({
           const sub = subs.get(run.id);
           sub?.close();
           subs.delete(run.id);
+          setStepProgressByRun((current) => {
+            if (!(run.id in current)) return current;
+            const { [run.id]: _omit, ...rest } = current;
+            void _omit;
+            return rest;
+          });
+          void refreshRun(run.id);
+        },
+        onCancelled: () => {
+          const sub = subs.get(run.id);
+          sub?.close();
+          subs.delete(run.id);
+          setStepProgressByRun((current) => {
+            if (!(run.id in current)) return current;
+            const { [run.id]: _omit, ...rest } = current;
+            void _omit;
+            return rest;
+          });
+          setLiveById((current) => {
+            const prev = current[run.id];
+            return {
+              ...current,
+              [run.id]: {
+                status: "cancelled",
+                results: prev?.results ?? run.results,
+                progress: null
+              }
+            };
+          });
           void refreshRun(run.id);
         },
         onError: () => {
@@ -765,6 +879,7 @@ export function PipelineRunsPanel({
                   liveStatus={liveStatus}
                   liveResults={liveResults}
                   liveProgress={liveProgress}
+                  stepProgress={stepProgressByRun[run.id] ?? {}}
                   cancelBusy={cancellingIds.has(run.id)}
                   onCancel={() => void handleCancel(run.id)}
                   rerunBusyStepId={rerunBusyByRun[run.id] ?? null}
