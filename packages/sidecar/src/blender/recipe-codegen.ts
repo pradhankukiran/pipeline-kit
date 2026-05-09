@@ -149,6 +149,25 @@ export interface RenderShotParams extends Preview1080pParams {
   readonly outputPath: string;
 }
 
+export interface RenderAnimationParams extends Preview1080pParams {
+  /**
+   * Absolute output directory. Each rendered frame lands here as
+   * `<framePrefix>####.png` (Blender substitutes the four-digit frame number
+   * itself).
+   */
+  readonly outputDir: string;
+  /**
+   * Filename prefix Blender prepends before the `####` substitution. Should
+   * already be sanitized; codegen does not escape it. Resulting paths look
+   * like `<outputDir>/<framePrefix>0001.png`.
+   */
+  readonly framePrefix: string;
+  /** Optional override for `scene.frame_start`. Positive integer. */
+  readonly frameStart?: number;
+  /** Optional override for `scene.frame_end`. Positive integer. */
+  readonly frameEnd?: number;
+}
+
 export interface ApplyMaterialParams {
   /** Object name to assign material to. Falls back to active object. */
   readonly target: string;
@@ -948,6 +967,51 @@ export function emitRenderShotBody(params: RenderShotParams): string {
 }
 
 /**
+ * Animation render codegen. Produces Python that:
+ *   - Applies the preview-1080p render preset.
+ *   - Optionally overrides `scene.frame_start` / `frame_end`. When omitted the
+ *     scene's existing values are kept (Blender renders the current range).
+ *   - Sets `scene.render.filepath` to `<outputDir>/<framePrefix>` — Blender's
+ *     `bpy.ops.render.render(animation=True)` appends the frame number and
+ *     image extension itself. We use a literal `####` so the output is
+ *     `<framePrefix>0001.png` etc., which matches the convention the artifact
+ *     consumer expects.
+ *   - Calls `bpy.ops.render.render(animation=True)`.
+ *
+ * The Python sets `_pk_render_output_dir` and `_pk_render_animation_*` vars so
+ * the wrapping script can echo them back into the JSON envelope.
+ */
+export function emitRenderAnimationBody(params: RenderAnimationParams): string {
+  const lines: string[] = [
+    emitPreview1080p({ samples: params.samples, denoise: params.denoise }),
+    ``,
+    `# PipelineKit op: render_shot (animation)`,
+    `import os as _pk_os`,
+    `_pk_render_output_dir = ${pyStr(params.outputDir)}`,
+    `_pk_os.makedirs(_pk_render_output_dir, exist_ok=True)`,
+    `_pk_render_frame_prefix = ${pyStr(params.framePrefix)}`,
+    // The trailing `####` tells Blender to substitute a 4-digit frame number.
+    `_pk_render_filepath = _pk_os.path.join(_pk_render_output_dir, _pk_render_frame_prefix + "####")`,
+    `bpy.context.scene.render.filepath = _pk_render_filepath`
+  ];
+
+  if (typeof params.frameStart === "number" && Number.isInteger(params.frameStart)) {
+    lines.push(`bpy.context.scene.frame_start = ${pyFloat(params.frameStart)}`);
+  }
+  if (typeof params.frameEnd === "number" && Number.isInteger(params.frameEnd)) {
+    lines.push(`bpy.context.scene.frame_end = ${pyFloat(params.frameEnd)}`);
+  }
+
+  lines.push(
+    `_pk_render_animation_frame_start = int(bpy.context.scene.frame_start)`,
+    `_pk_render_animation_frame_end = int(bpy.context.scene.frame_end)`,
+    `bpy.ops.render.render(animation=True)`
+  );
+
+  return lines.join("\n");
+}
+
+/**
  * Resolve the absolute render output path for a given (runId, opId) pair.
  *
  * Reads `PIPELINEKIT_RENDER_DIR` from the environment, defaulting to
@@ -966,6 +1030,36 @@ export function resolveRenderOutputPath(runId: string, opId: string): string {
   // Use forward-slash join: Python `os.makedirs` handles both, and Blender on
   // Windows accepts forward slashes in filepaths.
   return `${base}/${safeRun}/${safeOp}.png`;
+}
+
+/**
+ * Resolve the absolute render output directory and per-frame filename prefix
+ * for an animation render. The returned `dir` is a sibling of the still-render
+ * file: where `resolveRenderOutputPath(runId, opId)` returns
+ * `<base>/<runId>/<opId>.png`, this returns
+ * `<base>/<runId>/<opId>/` and `<opId>_` so per-frame outputs land at
+ * `<base>/<runId>/<opId>/<opId>_0001.png`.
+ *
+ * The directory layout keeps each animation contained beside its sibling still
+ * renders without colliding with them.
+ */
+export function resolveRenderAnimationOutput(
+  runId: string,
+  opId: string
+): { readonly dir: string; readonly framePrefix: string } {
+  const envDir = typeof process !== "undefined" ? process.env?.PIPELINEKIT_RENDER_DIR : undefined;
+  const home =
+    (typeof process !== "undefined" ? process.env?.HOME ?? process.env?.USERPROFILE : undefined) ??
+    "/tmp";
+  const base = envDir && envDir.length > 0 ? envDir : `${home}/.pipelinekit/renders`;
+
+  const safeRun = sanitizePathSegment(runId);
+  const safeOp = sanitizePathSegment(opId);
+
+  return {
+    dir: `${base}/${safeRun}/${safeOp}`,
+    framePrefix: `${safeOp}_`
+  };
 }
 
 function sanitizePathSegment(value: string): string {

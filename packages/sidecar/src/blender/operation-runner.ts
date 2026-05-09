@@ -20,11 +20,13 @@ import {
   emitPreview1080p,
   emitProductSweepSet,
   emitRecipeHelpers,
+  emitRenderAnimationBody,
   emitRenderShotBody,
   emitSoftboxThreePoint,
   emitStudioSetWaterBottle,
   emitTurntableOrbit,
   emitWhiteSweep,
+  resolveRenderAnimationOutput,
   resolveRenderOutputPath
 } from "./recipe-codegen.js";
 
@@ -265,6 +267,29 @@ print(json.dumps({"operation": operation["type"], "label": params["label"], "pat
 function scriptForRenderShot(operation: RenderShotOperation): string {
   const samplesByQuality = { preview: 32, review: 96, final: 256 } as const;
   const samples = samplesByQuality[operation.params.quality];
+
+  if (operation.params.animation === true) {
+    const { dir, framePrefix } = resolveRenderAnimationOutputForOp(operation);
+    const recipeBody = emitRenderAnimationBody({
+      outputDir: dir,
+      framePrefix,
+      samples,
+      ...(typeof operation.params.frameStart === "number"
+        ? { frameStart: operation.params.frameStart }
+        : {}),
+      ...(typeof operation.params.frameEnd === "number"
+        ? { frameEnd: operation.params.frameEnd }
+        : {})
+    });
+
+    return wrapRecipeScript(
+      operation,
+      `${recipeBody}
+print(json.dumps({"operation": operation["type"], "shotId": ${JSON.stringify(operation.params.shotId)}, "outputPath": _pk_render_output_dir, "quality": ${JSON.stringify(operation.params.quality)}, "animation": True, "framePrefix": _pk_render_frame_prefix, "frameStart": _pk_render_animation_frame_start, "frameEnd": _pk_render_animation_frame_end}))
+`
+    );
+  }
+
   const outputPath = resolveRenderShotPath(operation);
   const recipeBody = emitRenderShotBody({
     outputPath,
@@ -290,6 +315,34 @@ function resolveRenderShotPath(operation: RenderShotOperation): string {
   const runId = operation.projectId ?? "default";
   const opId = operation.params.shotId ?? operation.id;
   return resolveRenderOutputPath(runId, opId);
+}
+
+/**
+ * Resolve the on-disk directory + frame-name prefix for an animation render.
+ * If the caller passed an absolute or `//`-relative `outputPath` we honor it
+ * as the directory (its basename is also reused as the frame prefix), giving
+ * power-users full control over animation layout. Otherwise we delegate to
+ * `resolveRenderAnimationOutput` which derives the canonical
+ * `<base>/<runId>/<opId>/` layout.
+ */
+function resolveRenderAnimationOutputForOp(
+  operation: RenderShotOperation
+): { readonly dir: string; readonly framePrefix: string } {
+  const explicit = operation.params.outputPath;
+  if (
+    explicit &&
+    (explicit.startsWith("/") || explicit.startsWith("//") || /^[A-Za-z]:[\\/]/.test(explicit))
+  ) {
+    // Strip any trailing slash or `.png` and use the rest as the directory.
+    const trimmed = explicit.replace(/\.[A-Za-z0-9]+$/g, "").replace(/[\\/]+$/g, "");
+    const baseName = trimmed.split(/[\\/]/).pop();
+    const opId = operation.params.shotId ?? operation.id;
+    const framePrefix = `${slugForBlenderPath(baseName && baseName.length > 0 ? baseName : opId)}_`;
+    return { dir: trimmed, framePrefix };
+  }
+  const runId = operation.projectId ?? "default";
+  const opId = operation.params.shotId ?? operation.id;
+  return resolveRenderAnimationOutput(runId, opId);
 }
 
 function scriptForApplyMaterial(operation: ApplyMaterialOperation): string {
@@ -448,8 +501,29 @@ function artifactsForOperation(
   ];
 
   if (operation.type === "render_shot") {
-    const resolvedPath = readRenderOutputPath(mcpResult.output) ?? resolveRenderShotPath(operation);
-    artifacts.push({ kind: "render", path: resolvedPath });
+    if (operation.params.animation === true) {
+      const envelope = readRenderAnimationEnvelope(mcpResult.output);
+      const fallback = resolveRenderAnimationOutputForOp(operation);
+      const dir = envelope?.outputPath ?? fallback.dir;
+      const framePrefix = envelope?.framePrefix ?? fallback.framePrefix;
+      // OperationArtifact only allows a fixed `kind` union; surface the
+      // animation-specific metadata via `inlineJson` so consumers can
+      // distinguish a directory artifact from a single-file render. The
+      // `path` still points at the directory so generic UI can browse it.
+      artifacts.push({
+        kind: "render",
+        path: dir,
+        inlineJson: {
+          mode: "animation",
+          framePrefix,
+          frameStart: envelope?.frameStart,
+          frameEnd: envelope?.frameEnd
+        }
+      });
+    } else {
+      const resolvedPath = readRenderOutputPath(mcpResult.output) ?? resolveRenderShotPath(operation);
+      artifacts.push({ kind: "render", path: resolvedPath });
+    }
   }
 
   if (operation.type === "save_checkpoint" && operation.params.includeBlendFile) {
@@ -476,11 +550,44 @@ function slugForBlenderPath(value: string): string {
  * matching field is present.
  */
 function readRenderOutputPath(output: unknown): string | undefined {
+  const envelope = readRenderEnvelope(output);
+  if (envelope && typeof envelope["outputPath"] === "string") {
+    return envelope["outputPath"];
+  }
+  return undefined;
+}
+
+/**
+ * Animation-specific JSON envelope reader. The render_shot Python script with
+ * `animation: true` emits a richer envelope than the still-render path:
+ * `{ outputPath: <dir>, framePrefix, frameStart, frameEnd, animation: true }`.
+ * Returns `undefined` if no parseable JSON is found.
+ */
+function readRenderAnimationEnvelope(
+  output: unknown
+): { readonly outputPath?: string; readonly framePrefix?: string; readonly frameStart?: number; readonly frameEnd?: number } | undefined {
+  const envelope = readRenderEnvelope(output);
+  if (!envelope) {
+    return undefined;
+  }
+  return {
+    ...(typeof envelope["outputPath"] === "string" ? { outputPath: envelope["outputPath"] } : {}),
+    ...(typeof envelope["framePrefix"] === "string" ? { framePrefix: envelope["framePrefix"] } : {}),
+    ...(typeof envelope["frameStart"] === "number" ? { frameStart: envelope["frameStart"] } : {}),
+    ...(typeof envelope["frameEnd"] === "number" ? { frameEnd: envelope["frameEnd"] } : {})
+  };
+}
+
+/**
+ * Pulls the last well-formed JSON object from the Blender MCP output. Walks
+ * lines bottom-up because the Python script may print other diagnostic lines
+ * before the final envelope.
+ */
+function readRenderEnvelope(output: unknown): Record<string, unknown> | undefined {
   if (!isRecord(output)) {
     return undefined;
   }
 
-  // Prefer structuredContent.result, falling back to text content.
   const structured = isRecord(output["structuredContent"]) ? output["structuredContent"] : undefined;
   const structuredResult = structured?.["result"];
   const candidates: unknown[] = [structuredResult, readMcpText(output)];
@@ -489,8 +596,6 @@ function readRenderOutputPath(output: unknown): string | undefined {
     if (typeof candidate !== "string") {
       continue;
     }
-    // Find the last well-formed JSON object on a line; Blender output may
-    // include other prints before the envelope.
     for (const line of candidate.split(/\r?\n/).reverse()) {
       const trimmed = line.trim();
       if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
@@ -498,8 +603,8 @@ function readRenderOutputPath(output: unknown): string | undefined {
       }
       try {
         const parsed = JSON.parse(trimmed) as unknown;
-        if (isRecord(parsed) && typeof parsed["outputPath"] === "string") {
-          return parsed["outputPath"];
+        if (isRecord(parsed)) {
+          return parsed;
         }
       } catch {
         // ignore
