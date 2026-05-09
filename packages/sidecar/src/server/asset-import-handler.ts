@@ -9,20 +9,6 @@ import {
 } from "../blender/asset-import-codegen.js";
 import type { BlenderOperationAdapter } from "./blender-adapter.js";
 
-// Ambient additions to the project's hand-rolled node shims. These declarations
-// only widen the existing module surface without overriding what is already
-// exported in `node-shims.d.ts`.
-declare module "node:fs/promises" {
-  export function realpath(path: string): Promise<string>;
-}
-
-declare module "node:path" {
-  export function basename(path: string, ext?: string): string;
-  export function extname(path: string): string;
-  export function isAbsolute(path: string): boolean;
-  export function resolve(...segments: string[]): string;
-}
-
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 const POLYHAVEN_KINDS = new Set(["hdri", "material", "model"]);
 const LOCAL_KINDS = new Set(["hdri", "material", "model"]);

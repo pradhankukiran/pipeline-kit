@@ -35,33 +35,6 @@ import {
   type SidecarState
 } from "./state.js";
 
-declare module "node:fs/promises" {
-  export interface Dirent {
-    name: string;
-    isDirectory(): boolean;
-    isFile(): boolean;
-    isSymbolicLink(): boolean;
-  }
-
-  export interface Stats {
-    size: number;
-    mtimeMs: number;
-  }
-
-  export function readdir(
-    path: string,
-    options: { withFileTypes: true }
-  ): Promise<Dirent[]>;
-  export function readdir(path: string): Promise<string[]>;
-  export function stat(path: string): Promise<Stats>;
-}
-
-declare module "node:path" {
-  export const sep: string;
-  export function relative(from: string, to: string): string;
-  export function resolve(...segments: string[]): string;
-}
-
 const DEFAULT_PORT = 4317;
 const MAX_BODY_BYTES = 1024 * 1024;
 

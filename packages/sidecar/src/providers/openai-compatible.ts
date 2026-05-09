@@ -271,17 +271,6 @@ async function buildRequestMessages(request: ModelRequest): Promise<readonly Ope
   return baseMessages;
 }
 
-/**
- * Local typing for Node's `Buffer` global. The repo's `node-shims.d.ts`
- * declares a Uint8Array-shaped Buffer without the encoding-aware `toString`
- * overloads we need here, so we narrow it locally rather than depending on
- * `@types/node` (not a direct dep) or editing the server shim.
- */
-interface NodeBufferLike {
-  from(input: Uint8Array): { toString(encoding: "base64"): string };
-}
-declare const Buffer: NodeBufferLike;
-
 async function buildImagePart(image: ProviderImageInput): Promise<OpenAiImagePart> {
   if (typeof image.localPath === "string" && image.localPath.length > 0) {
     const bytes = await readFile(image.localPath);

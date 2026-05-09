@@ -35,6 +35,18 @@ declare module "node:net" {
 }
 
 declare module "node:fs/promises" {
+  export interface Dirent {
+    name: string;
+    isDirectory(): boolean;
+    isFile(): boolean;
+    isSymbolicLink(): boolean;
+  }
+
+  export interface Stats {
+    size: number;
+    mtimeMs: number;
+  }
+
   export function readFile(path: string, encoding: "utf8"): Promise<string>;
   export function readFile(path: string): Promise<Uint8Array>;
   export function writeFile(
@@ -43,9 +55,21 @@ declare module "node:fs/promises" {
     options: { encoding: "utf8" }
   ): Promise<void>;
   export function writeFile(path: string, data: Uint8Array): Promise<void>;
+  export function appendFile(
+    path: string,
+    data: string,
+    options: { encoding: "utf8" }
+  ): Promise<void>;
   export function rename(oldPath: string, newPath: string): Promise<void>;
   export function mkdir(path: string, options: { recursive: boolean }): Promise<string | undefined>;
   export function access(path: string): Promise<void>;
+  export function realpath(path: string): Promise<string>;
+  export function readdir(
+    path: string,
+    options: { withFileTypes: true }
+  ): Promise<Dirent[]>;
+  export function readdir(path: string): Promise<string[]>;
+  export function stat(path: string): Promise<Stats>;
 }
 
 declare module "node:os" {
@@ -53,8 +77,14 @@ declare module "node:os" {
 }
 
 declare module "node:path" {
+  export const sep: string;
   export function join(...segments: string[]): string;
   export function dirname(path: string): string;
+  export function basename(path: string, ext?: string): string;
+  export function extname(path: string): string;
+  export function isAbsolute(path: string): boolean;
+  export function relative(from: string, to: string): string;
+  export function resolve(...segments: string[]): string;
 }
 
 declare const process: {
@@ -65,10 +95,24 @@ declare const process: {
   };
 };
 
+/**
+ * Hand-rolled `Buffer` global. Returns a `Uint8Array`-compatible value that
+ * also exposes the encoding-aware `toString` overloads we use across the
+ * sidecar (`"utf8"` for HTTP body assembly, `"base64"` for image payloads in
+ * the OpenAI-compatible provider).
+ *
+ * The toString overload list keeps the parameterless variant first so the
+ * value remains structurally assignable to `Uint8Array` (whose own
+ * `toString(): string` would otherwise be incompatible with a stricter
+ * encoding-required signature).
+ */
+interface NodeBuffer extends Uint8Array {
+  toString(): string;
+  toString(encoding: "utf8" | "base64"): string;
+}
+
 declare const Buffer: {
-  isBuffer(value: unknown): value is Uint8Array;
-  from(value: string | Uint8Array): Uint8Array;
-  concat(chunks: readonly Uint8Array[]): {
-    toString(encoding: "utf8"): string;
-  };
+  isBuffer(value: unknown): value is NodeBuffer;
+  from(value: string | Uint8Array): NodeBuffer;
+  concat(chunks: readonly Uint8Array[]): NodeBuffer;
 };

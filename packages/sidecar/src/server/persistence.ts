@@ -4,14 +4,6 @@ import { dirname, join } from "node:path";
 import type { Approval, Project } from "@pipelinekit/core";
 import type { PipelineRunRecord, RecentOperation, SidecarSettings } from "./state.js";
 
-declare module "node:fs/promises" {
-  export function appendFile(
-    path: string,
-    data: string,
-    options: { encoding: "utf8" }
-  ): Promise<void>;
-}
-
 const CURRENT_SCHEMA_VERSION = 2;
 const SUPPORTED_SCHEMA_VERSIONS = new Set<number>([1, 2]);
 
