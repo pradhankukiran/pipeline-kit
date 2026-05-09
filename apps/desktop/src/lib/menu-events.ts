@@ -14,6 +14,7 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useDashboard } from "@/dashboard-context";
+import { checkForUpdate, formatUpdateBanner } from "@/lib/updater";
 
 type Unlisten = () => void;
 
@@ -25,7 +26,9 @@ export function useMenuEvents(): void {
     handleExportProject,
     handleImportProject,
     handleRunPlanner,
-    setSubmitBanner
+    setSubmitBanner,
+    availableUpdate,
+    setAvailableUpdate
   } = useDashboard();
 
   useEffect(() => {
@@ -121,9 +124,68 @@ export function useMenuEvents(): void {
 
     unlistens.push(
       listen("menu:check-updates", () => {
-        // Updater integration hasn't shipped yet; surface a friendly
-        // banner so the menu item isn't a dead-end.
-        setSubmitBanner("Update checks aren't wired up in this build yet.");
+        void (async () => {
+          // If the launch-time poll already discovered an update, jump
+          // straight to the install prompt — no need to re-check the
+          // endpoint just to rediscover the same release.
+          const cached = availableUpdate;
+          if (cached) {
+            const ok = window.confirm(
+              `PipelineKit ${cached.version} is available.\n\n` +
+                "Update now? The app will download the installer and " +
+                "restart automatically when it's ready."
+            );
+            if (!ok) {
+              setSubmitBanner("Update postponed. Use Help → Check for Updates when you're ready.");
+              return;
+            }
+            setSubmitBanner(`Downloading PipelineKit ${cached.version}…`);
+            try {
+              await cached.downloadAndInstall();
+            } catch (err) {
+              const reason =
+                err instanceof Error ? err.message : "Update failed";
+              setSubmitBanner(`Update failed: ${reason}`);
+            }
+            return;
+          }
+
+          setSubmitBanner("Checking for updates…");
+          const result = await checkForUpdate({ silent: false });
+          if (!result || result.kind === "unsupported") {
+            setSubmitBanner(
+              "Update checks aren't available in this dev runtime."
+            );
+            return;
+          }
+          if (result.kind === "up-to-date") {
+            setSubmitBanner("PipelineKit is up to date.");
+            return;
+          }
+          if (result.kind === "error") {
+            setSubmitBanner(`Update check failed: ${result.message}`);
+            return;
+          }
+          // result.kind === "available"
+          setAvailableUpdate(result.update);
+          const ok = window.confirm(
+            `PipelineKit ${result.update.version} is available.\n\n` +
+              "Update now? The app will download the installer and " +
+              "restart automatically when it's ready."
+          );
+          if (!ok) {
+            setSubmitBanner(formatUpdateBanner(result.update));
+            return;
+          }
+          setSubmitBanner(`Downloading PipelineKit ${result.update.version}…`);
+          try {
+            await result.update.downloadAndInstall();
+          } catch (err) {
+            const reason =
+              err instanceof Error ? err.message : "Update failed";
+            setSubmitBanner(`Update failed: ${reason}`);
+          }
+        })();
       })
     );
 
@@ -142,6 +204,8 @@ export function useMenuEvents(): void {
     handleExportProject,
     handleImportProject,
     handleRunPlanner,
-    setSubmitBanner
+    setSubmitBanner,
+    availableUpdate,
+    setAvailableUpdate
   ]);
 }

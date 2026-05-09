@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 
 import { SettingsPanel } from "@/components/panels/SettingsPanel";
 import { useMenuEvents } from "@/lib/menu-events";
+import { checkForUpdate, formatUpdateBanner, type UpdateInfo } from "@/lib/updater";
 import {
   DashboardContext,
   type DashboardContextValue,
@@ -190,6 +191,7 @@ export function App() {
   const [approvalsRefreshTick, setApprovalsRefreshTick] = useState(0);
   const [exportingProject, setExportingProject] = useState(false);
   const [importingProject, setImportingProject] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
 
   const refreshProjects = useCallback(async (): Promise<{
     projects: ProjectRecord[];
@@ -344,6 +346,32 @@ export function App() {
   useEffect(() => {
     void refreshOperations();
   }, [refreshOperations]);
+
+  // On-launch updater check. Fires once after the initial sidecar settings
+  // load resolves so we can honour the user's `checkForUpdatesOnLaunch`
+  // preference (defaults to `true` when the setting isn't present yet).
+  // Subsequent setting toggles never re-run the launch check; the user can
+  // always trigger one manually via Help → Check for Updates.
+  const [launchUpdateChecked, setLaunchUpdateChecked] = useState(false);
+  // Read defensively in case the settings shape predates the field.
+  const checkForUpdatesOnLaunch =
+    (settings as { checkForUpdatesOnLaunch?: boolean }).checkForUpdatesOnLaunch !== false;
+  useEffect(() => {
+    if (loading || launchUpdateChecked) {
+      return;
+    }
+    setLaunchUpdateChecked(true);
+    if (!checkForUpdatesOnLaunch) {
+      return;
+    }
+    void (async () => {
+      const result = await checkForUpdate({ silent: true });
+      if (result?.kind === "available") {
+        setAvailableUpdate(result.update);
+        setSubmitBanner(formatUpdateBanner(result.update));
+      }
+    })();
+  }, [loading, launchUpdateChecked, checkForUpdatesOnLaunch]);
 
   // Global SSE: any step.started carrying requiresApproval triggers an
   // approvals refresh tick. Errors silently drop the subscription —
@@ -612,6 +640,8 @@ export function App() {
       submitBanner,
       setSubmitBanner,
       approvalsRefreshTick,
+      availableUpdate,
+      setAvailableUpdate,
       handleSyncBlender,
       handleRunPlanner
     }),
@@ -647,6 +677,7 @@ export function App() {
       opsScopeActive,
       submitBanner,
       approvalsRefreshTick,
+      availableUpdate,
       handleSyncBlender,
       handleRunPlanner
     ]

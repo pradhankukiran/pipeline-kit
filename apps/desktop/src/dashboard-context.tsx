@@ -4,6 +4,7 @@ import type {
   PipelineSettings,
   PipelineSnapshot
 } from "./fallbackData";
+import type { UpdateInfo } from "./lib/updater";
 import type {
   BlenderTool,
   ProjectRecord,
@@ -107,6 +108,10 @@ export interface DashboardContextValue {
   submitBanner: string | null;
   setSubmitBanner: (value: string | null) => void;
   approvalsRefreshTick: number;
+
+  // Updater
+  availableUpdate: UpdateInfo | null;
+  setAvailableUpdate: (value: UpdateInfo | null) => void;
 
   // High-level actions
   handleSyncBlender: () => Promise<void>;
