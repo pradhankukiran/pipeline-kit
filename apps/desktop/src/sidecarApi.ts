@@ -182,6 +182,13 @@ function normalizeSettings(value: unknown): Partial<PipelineSettings> {
         : typeof settings.approvalTimeoutMs === "number"
           ? Math.round(settings.approvalTimeoutMs / 1000)
           : undefined,
+    // Purely a desktop-side preference. The sidecar persists it through its
+    // generic state.json passthrough but doesn't consume it; the UI reads
+    // the value back on launch to decide whether to poll the updater.
+    checkForUpdatesOnLaunch:
+      typeof settings.checkForUpdatesOnLaunch === "boolean"
+        ? settings.checkForUpdatesOnLaunch
+        : undefined,
     groqModel: typeof settings.groqModel === "string"
       ? settings.groqModel
       : typeof models.groqModel === "string"
@@ -422,6 +429,7 @@ function toSidecarSettings(settings: PipelineSettings): Record<string, unknown> 
       autoCheckpoint: settings.blenderAutoCheckpoint
     },
     approvalTimeoutSec: settings.approvalTimeoutSec,
+    checkForUpdatesOnLaunch: settings.checkForUpdatesOnLaunch,
     groq: {
       apiKey: settings.groqApiKey
     },

@@ -25,9 +25,11 @@ export interface SettingsPanelProps {
   autoConnect: boolean;
   autoCheckpoint: boolean;
   approvalTimeoutSec: number;
+  checkForUpdatesOnLaunch: boolean;
   onAutoConnectChange: (value: boolean) => void;
   onAutoCheckpointChange: (value: boolean) => void;
   onApprovalTimeoutChange: (value: number) => void;
+  onCheckForUpdatesOnLaunchChange: (value: boolean) => void;
   onChange: (field: keyof PipelineSettings, value: string) => void;
   onSave: () => void | Promise<void>;
 }
@@ -46,9 +48,11 @@ export function SettingsPanel({
   autoConnect,
   autoCheckpoint,
   approvalTimeoutSec,
+  checkForUpdatesOnLaunch,
   onAutoConnectChange,
   onAutoCheckpointChange,
   onApprovalTimeoutChange,
+  onCheckForUpdatesOnLaunchChange,
   onChange,
   onSave,
 }: SettingsPanelProps) {
@@ -226,6 +230,52 @@ export function SettingsPanel({
                 will be picked up by a future sidecar release.
               </p>
             </div>
+          </section>
+
+          <Separator />
+
+          {/* Updates */}
+          <section className="space-y-3">
+            <div>
+              <h3 className="text-sm font-medium">Updates</h3>
+              <p className="text-xs text-muted-foreground">
+                Auto-update preferences for the desktop shell.
+              </p>
+            </div>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-border bg-secondary/30 px-3 py-2">
+              <span className="flex flex-col">
+                <span className="text-sm font-medium">Check for updates on launch</span>
+                <span className="text-xs text-muted-foreground">
+                  Quietly query the GitHub release endpoint when the app
+                  starts. You can always trigger a manual check via Help →
+                  Check for Updates.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={checkForUpdatesOnLaunch}
+                onChange={(event) =>
+                  onCheckForUpdatesOnLaunchChange(event.target.checked)
+                }
+                className="peer sr-only"
+                aria-label="Check for updates on launch"
+              />
+              <span
+                aria-hidden
+                className={cn(
+                  "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-border bg-input transition-colors",
+                  "peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background",
+                  checkForUpdatesOnLaunch && "bg-primary"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-4 w-4 rounded-full bg-background shadow transition-transform",
+                    checkForUpdatesOnLaunch ? "translate-x-4" : "translate-x-0.5"
+                  )}
+                />
+              </span>
+            </label>
           </section>
 
           <Separator />

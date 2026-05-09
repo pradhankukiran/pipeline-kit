@@ -53,6 +53,13 @@ export type PipelineSettings = {
   autoConnect: boolean;
   blenderAutoCheckpoint: boolean;
   approvalTimeoutSec: number;
+  /**
+   * Run a silent updater check against the configured GitHub release
+   * endpoint as soon as the desktop app finishes loading sidecar state.
+   * Defaults to `true`. Users can always trigger a manual check via
+   * Help → Check for Updates regardless of this setting.
+   */
+  checkForUpdatesOnLaunch: boolean;
   groqModel: string;
   groqApiKey: string;
   openRouterModel: string;
@@ -86,6 +93,7 @@ export const fallbackSettings: PipelineSettings = {
   autoConnect: false,
   blenderAutoCheckpoint: true,
   approvalTimeoutSec: 0,
+  checkForUpdatesOnLaunch: true,
   groqModel: "llama-3.3-70b-versatile",
   groqApiKey: "",
   openRouterModel: "anthropic/claude-3.5-sonnet",

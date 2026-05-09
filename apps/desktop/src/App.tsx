@@ -353,9 +353,7 @@ export function App() {
   // Subsequent setting toggles never re-run the launch check; the user can
   // always trigger one manually via Help → Check for Updates.
   const [launchUpdateChecked, setLaunchUpdateChecked] = useState(false);
-  // Read defensively in case the settings shape predates the field.
-  const checkForUpdatesOnLaunch =
-    (settings as { checkForUpdatesOnLaunch?: boolean }).checkForUpdatesOnLaunch !== false;
+  const { checkForUpdatesOnLaunch } = settings;
   useEffect(() => {
     if (loading || launchUpdateChecked) {
       return;
@@ -481,6 +479,10 @@ export function App() {
 
   const setApprovalTimeoutSec = useCallback((value: number) => {
     setSettings((current) => ({ ...current, approvalTimeoutSec: value }));
+  }, []);
+
+  const setCheckForUpdatesOnLaunch = useCallback((value: boolean) => {
+    setSettings((current) => ({ ...current, checkForUpdatesOnLaunch: value }));
   }, []);
 
   const handleSaveSettings = useCallback(async () => {
@@ -710,9 +712,11 @@ export function App() {
         autoConnect={settings.autoConnect}
         autoCheckpoint={settings.blenderAutoCheckpoint}
         approvalTimeoutSec={settings.approvalTimeoutSec}
+        checkForUpdatesOnLaunch={settings.checkForUpdatesOnLaunch}
         onAutoConnectChange={setAutoConnect}
         onAutoCheckpointChange={setAutoCheckpoint}
         onApprovalTimeoutChange={setApprovalTimeoutSec}
+        onCheckForUpdatesOnLaunchChange={setCheckForUpdatesOnLaunch}
         onChange={updateSetting}
         onSave={handleSaveSettings}
       />
