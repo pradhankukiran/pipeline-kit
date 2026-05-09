@@ -16,7 +16,9 @@ import type { BlenderMcpClient, BlenderMcpCommand, BlenderMcpResult } from "./mc
 import {
   emitApplyMaterial,
   emitMatteClay,
+  emitPedestalSet,
   emitPreview1080p,
+  emitProductSweepSet,
   emitRecipeHelpers,
   emitRenderShotBody,
   emitSoftboxThreePoint,
@@ -139,14 +141,28 @@ print(json.dumps({"operation": operation["type"], "scene": bpy.context.scene.nam
 
 function scriptForCreateStudioSet(operation: CreateStudioSetOperation): string {
   const recipeId = operation.params.recipeId;
-  // Map registry/composite recipe IDs onto codegen.
+  // Each recipeId in the Zod enum maps to a distinct emitter:
   // - water_bottle_product_viz -> full composite scene
-  // - product_sweep / pedestal / fallback -> single white-sweep floor
+  // - product_sweep -> sweep + lights + camera (no material/preset)
+  // - pedestal -> sweep + cylindrical pedestal at origin
   let recipeBody: string;
-  if (recipeId === "water_bottle_product_viz") {
-    recipeBody = emitStudioSetWaterBottle();
-  } else {
-    recipeBody = emitWhiteSweep();
+  switch (recipeId) {
+    case "water_bottle_product_viz":
+      recipeBody = emitStudioSetWaterBottle();
+      break;
+    case "product_sweep":
+      recipeBody = emitProductSweepSet();
+      break;
+    case "pedestal":
+      recipeBody = emitPedestalSet();
+      break;
+    default: {
+      // Exhaustiveness — falls back to a plain sweep if the union ever grows.
+      const _exhaustive: never = recipeId;
+      void _exhaustive;
+      recipeBody = emitWhiteSweep();
+      break;
+    }
   }
 
   return wrapRecipeScript(

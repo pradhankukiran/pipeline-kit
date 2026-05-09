@@ -143,6 +143,26 @@ export interface StudioSetWaterBottleParams {
   readonly renderPreset?: Preview1080pParams;
 }
 
+export interface ProductSweepSetParams {
+  /** Floor size override. */
+  readonly floorSize?: number;
+  /** Lighting overrides. */
+  readonly lighting?: SoftboxThreePointParams;
+  /** Camera overrides. */
+  readonly camera?: TurntableOrbitParams;
+}
+
+export interface PedestalSetParams {
+  /** Floor size override. */
+  readonly floorSize?: number;
+  /** Pedestal radius in metres. Default 0.5. */
+  readonly pedestalRadius?: number;
+  /** Pedestal height in metres. Default 0.4. */
+  readonly pedestalHeight?: number;
+  /** Pedestal cylinder side count. Default 64. */
+  readonly pedestalSides?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Python emission helpers
 // ---------------------------------------------------------------------------
@@ -471,6 +491,74 @@ export function emitStudioSetWaterBottle(params: StudioSetWaterBottleParams = {}
     emitTurntableOrbit(params.camera ?? {}),
     emitMatteClay(params.material ?? {}),
     emitPreview1080p(params.renderPreset ?? {}),
+  ].join("\n");
+}
+
+/**
+ * Composite recipe: `studio-set:product_sweep`. Emits a clean white sweep
+ * floor, three-point softbox lighting, and a turntable camera. No material
+ * is applied to the subject and no render preset is set — callers can layer
+ * those independently.
+ */
+export function emitProductSweepSet(params: ProductSweepSetParams = {}): string {
+  const floorSize = params.floorSize ?? 10;
+
+  return [
+    `# PipelineKit composite recipe: studio-set:product_sweep`,
+    `# Clear any existing PK_* objects first`,
+    `for _pk_obj in [o for o in bpy.data.objects if o.name.startswith("PK_")]:`,
+    `    bpy.data.objects.remove(_pk_obj, do_unlink=True)`,
+    ``,
+    emitWhiteSweep({ floorSize }),
+    emitSoftboxThreePoint(params.lighting ?? {}),
+    emitTurntableOrbit(params.camera ?? {}),
+  ].join("\n");
+}
+
+/**
+ * Composite recipe: `studio-set:pedestal`. Emits a small cylindrical
+ * pedestal (`PK_pedestal_cylinder`) at the origin sitting on a white-sweep
+ * floor. No lighting/camera/material/preset is applied — caller layers the
+ * rest.
+ */
+export function emitPedestalSet(params: PedestalSetParams = {}): string {
+  const floorSize = params.floorSize ?? 10;
+  const pedestalRadius = params.pedestalRadius ?? 0.5;
+  const pedestalHeight = params.pedestalHeight ?? 0.4;
+  const pedestalSides = params.pedestalSides ?? 64;
+
+  // The pedestal sits with its base on the floor (z=0) and rises up.
+  const halfHeight = pedestalHeight / 2;
+
+  const pedestalBody = `# PipelineKit recipe: prop:pedestal-cylinder
+_pk_remove_object("PK_pedestal_cylinder")
+_pk_pedestal_mesh = bpy.data.meshes.new("PK_pedestal_cylinder_mesh")
+_pk_pedestal_obj = bpy.data.objects.new("PK_pedestal_cylinder", _pk_pedestal_mesh)
+_pk_link(_pk_pedestal_obj)
+import bmesh as _pk_bmesh_pedestal
+_pk_bm_pedestal = _pk_bmesh_pedestal.new()
+_pk_bmesh_pedestal.ops.create_cone(
+    _pk_bm_pedestal,
+    cap_ends=True,
+    cap_tris=False,
+    segments=${pyFloat(pedestalSides)},
+    radius1=${pyFloat(pedestalRadius)},
+    radius2=${pyFloat(pedestalRadius)},
+    depth=${pyFloat(pedestalHeight)},
+)
+_pk_bm_pedestal.to_mesh(_pk_pedestal_mesh)
+_pk_bm_pedestal.free()
+_pk_pedestal_obj.location = (0.0, 0.0, ${pyFloat(halfHeight)})
+`;
+
+  return [
+    `# PipelineKit composite recipe: studio-set:pedestal`,
+    `# Clear any existing PK_* objects first`,
+    `for _pk_obj in [o for o in bpy.data.objects if o.name.startswith("PK_")]:`,
+    `    bpy.data.objects.remove(_pk_obj, do_unlink=True)`,
+    ``,
+    emitWhiteSweep({ floorSize }),
+    pedestalBody,
   ].join("\n");
 }
 
