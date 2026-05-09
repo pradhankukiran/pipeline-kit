@@ -10,22 +10,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SetupChecklist } from "./SetupChecklist";
 import type { ProjectRecord } from "@/sidecarApi";
 
 export interface WelcomeProps {
   projects: ProjectRecord[];
   onCreateProject: (name: string) => Promise<void> | void;
   onSelectProject: (id: string) => void;
-  // setup checklist data
-  sidecarConnected: boolean;
-  blenderConnected: boolean;
-  blenderConnecting: boolean;
-  groqConfigured: boolean;
-  openRouterConfigured: boolean;
-  onOpenSettings: () => void;
-  onConnectBlender: () => void;
-  sidecarUrl: string;
 }
 
 export function Welcome(props: WelcomeProps) {
@@ -33,14 +23,6 @@ export function Welcome(props: WelcomeProps) {
     projects,
     onCreateProject,
     onSelectProject,
-    sidecarConnected,
-    blenderConnected,
-    blenderConnecting,
-    groqConfigured,
-    openRouterConfigured,
-    onOpenSettings,
-    onConnectBlender,
-    sidecarUrl,
   } = props;
 
   const hasProjects = projects.length > 0;
@@ -66,10 +48,8 @@ export function Welcome(props: WelcomeProps) {
   }
 
   return (
-    <div className="flex min-h-[calc(100vh-60px)] items-center justify-center px-6 py-12">
-      <div className="grid w-full max-w-5xl items-start gap-8 lg:grid-cols-2">
-        {/* Left column */}
-        <div className="flex flex-col gap-6">
+    <div className="flex min-h-[calc(100vh-60px)] items-start justify-center px-6 py-12">
+      <div className="flex w-full max-w-3xl flex-col gap-6">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground">
               Welcome to PipelineKit
@@ -190,19 +170,6 @@ export function Welcome(props: WelcomeProps) {
               </form>
             </CardContent>
           </Card>
-        </div>
-
-        {/* Right column: Setup checklist */}
-        <SetupChecklist
-          sidecarConnected={sidecarConnected}
-          blenderConnected={blenderConnected}
-          blenderConnecting={blenderConnecting}
-          groqConfigured={groqConfigured}
-          openRouterConfigured={openRouterConfigured}
-          onOpenSettings={onOpenSettings}
-          onConnectBlender={onConnectBlender}
-          sidecarUrl={sidecarUrl}
-        />
       </div>
     </div>
   );

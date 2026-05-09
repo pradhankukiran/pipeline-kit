@@ -1,7 +1,7 @@
 import { Outlet } from "react-router-dom";
 
 import { AppShell } from "@/components/layout/AppShell";
-import { useTopbarSlots } from "@/components/layout/topbar-slots";
+import { useHomeTopbarSlots } from "@/components/layout/topbar-slots";
 
 /**
  * Top-level layout used for routes outside of a specific project
@@ -9,13 +9,10 @@ import { useTopbarSlots } from "@/components/layout/topbar-slots";
  * No sidebar.
  */
 export function Layout() {
-  const { projectPicker, topbarMetrics, apiStatus, topbarActions } =
-    useTopbarSlots();
+  const { apiStatus, topbarActions } = useHomeTopbarSlots();
 
   return (
     <AppShell
-      projectPicker={projectPicker}
-      topbarMetrics={topbarMetrics}
       topbarActions={topbarActions}
       apiStatus={apiStatus}
     >

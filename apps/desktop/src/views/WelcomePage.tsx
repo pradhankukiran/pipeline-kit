@@ -7,13 +7,7 @@ export function WelcomePage() {
   const {
     projects,
     handleCreateProject,
-    handleSelectProject,
-    health,
-    actions,
-    settings,
-    setSettingsOpen,
-    handleConnectBlender,
-    sidecarUrl,
+    handleSelectProject
   } = useDashboard();
 
   return (
@@ -24,14 +18,6 @@ export function WelcomePage() {
         void handleSelectProject(id);
         navigate(`/projects/${id}/overview`);
       }}
-      sidecarConnected={Boolean(health?.ok)}
-      blenderConnected={Boolean(health?.blender?.connected)}
-      blenderConnecting={actions.connect}
-      groqConfigured={(settings.groqApiKey ?? "").length > 0}
-      openRouterConfigured={(settings.openRouterApiKey ?? "").length > 0}
-      onOpenSettings={() => setSettingsOpen(true)}
-      onConnectBlender={() => void handleConnectBlender()}
-      sidecarUrl={sidecarUrl}
     />
   );
 }

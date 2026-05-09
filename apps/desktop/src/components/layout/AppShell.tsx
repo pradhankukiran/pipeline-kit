@@ -4,10 +4,10 @@ import { Link } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
 
 export type AppShellProps = {
-  projectPicker: React.ReactNode;
-  topbarMetrics: React.ReactNode;
-  topbarActions: React.ReactNode;
-  apiStatus: React.ReactNode;
+  projectPicker?: React.ReactNode;
+  topbarMetrics?: React.ReactNode;
+  topbarActions?: React.ReactNode;
+  apiStatus?: React.ReactNode;
   children: React.ReactNode;
   /**
    * When true, AppShell renders children directly inside <main> without
@@ -25,6 +25,9 @@ export function AppShell({
   children,
   disableContentContainer = false
 }: AppShellProps) {
+  const hasProjectPicker = Boolean(projectPicker);
+  const hasMetrics = Boolean(topbarMetrics);
+
   return (
     <div className="flex min-h-screen min-w-[980px] flex-col bg-background text-foreground">
       <header className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center gap-4 border-b border-border bg-white px-6">
@@ -35,9 +38,17 @@ export function AppShell({
         >
           PipelineKit
         </Link>
-        <Separator orientation="vertical" className="h-6" />
-        <div className="min-w-0 flex-1">{projectPicker}</div>
-        <div className="hidden items-center gap-2 lg:flex">{topbarMetrics}</div>
+        {hasProjectPicker ? (
+          <>
+            <Separator orientation="vertical" className="h-6" />
+            <div className="min-w-0 flex-1">{projectPicker}</div>
+          </>
+        ) : (
+          <div className="min-w-0 flex-1" />
+        )}
+        {hasMetrics ? (
+          <div className="hidden items-center gap-2 lg:flex">{topbarMetrics}</div>
+        ) : null}
         <div className="flex items-center gap-2">
           {apiStatus}
           {topbarActions}

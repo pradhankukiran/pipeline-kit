@@ -66,7 +66,7 @@ export function ApiStatusIndicator({
   message: string | null;
 }) {
   const status = health?.status ?? "offline";
-  const label = loading ? "Checking sidecar" : health?.ok ? "Sidecar online" : "Static fallback";
+  const label = loading ? "Checking sidecar" : health?.ok ? "Sidecar online" : "Sidecar offline";
   const detail = message ?? error ?? sidecarBaseUrl;
 
   const dotCls =
@@ -110,11 +110,14 @@ export function useTopbarSlots() {
     loading,
     error,
     message,
+    settings,
     actions,
     handleSyncBlender,
     handleRunPlanner,
     setSettingsOpen
   } = useDashboard();
+  const sidecarOnline = health?.ok === true;
+  const plannerReady = sidecarOnline && Boolean(currentProjectId) && settings.groqApiKey.trim().length > 0;
 
   const projectPicker = (
     <ProjectPicker
@@ -154,7 +157,8 @@ export function useTopbarSlots() {
         variant="outline"
         size="default"
         onClick={() => void handleSyncBlender()}
-        disabled={actions.sync || loading}
+        disabled={!sidecarOnline || actions.sync || loading}
+        title={!sidecarOnline ? "Sidecar is offline" : undefined}
       >
         {actions.sync ? <Loader2 className="animate-spin" /> : <RefreshCw />}
         {actions.sync ? "Syncing…" : "Sync Blender"}
@@ -163,7 +167,16 @@ export function useTopbarSlots() {
         type="button"
         size="default"
         onClick={() => void handleRunPlanner()}
-        disabled={actions.planner || loading}
+        disabled={!plannerReady || actions.planner || loading}
+        title={
+          !sidecarOnline
+            ? "Sidecar is offline"
+            : !currentProjectId
+              ? "Select or create a project first"
+              : settings.groqApiKey.trim().length === 0
+                ? "Add a Groq API key in settings"
+                : undefined
+        }
       >
         {actions.planner ? <Loader2 className="animate-spin" /> : <Play />}
         {actions.planner ? "Submitting…" : "Run Planner"}
@@ -181,4 +194,54 @@ export function useTopbarSlots() {
   );
 
   return { projectPicker, topbarMetrics, apiStatus, topbarActions };
+}
+
+export function useHomeTopbarSlots() {
+  const {
+    health,
+    loading,
+    error,
+    message,
+    actions,
+    handleConnectBlender,
+    setSettingsOpen
+  } = useDashboard();
+  const showConnectBlender = health?.ok === true && health.blender?.connected !== true;
+
+  const apiStatus = (
+    <ApiStatusIndicator
+      health={health}
+      loading={loading}
+      error={error}
+      message={message}
+    />
+  );
+
+  const topbarActions = (
+    <>
+      {showConnectBlender ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="default"
+          onClick={() => void handleConnectBlender()}
+          disabled={actions.connect || loading}
+        >
+          {actions.connect ? <Loader2 className="animate-spin" /> : null}
+          {actions.connect ? "Connecting…" : "Connect Blender"}
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={() => setSettingsOpen(true)}
+        aria-label="Open settings"
+      >
+        <SettingsIcon />
+      </Button>
+    </>
+  );
+
+  return { apiStatus, topbarActions };
 }
