@@ -51,6 +51,64 @@ export interface MatteClayParams {
   readonly roughness?: number;
 }
 
+export interface ClearPlasticParams {
+  /** RGB triple (0..1). Default near-white. */
+  readonly baseColor?: readonly [number, number, number];
+  /** Roughness 0..1. Default 0.05. */
+  readonly roughness?: number;
+  /** Alpha 0..1 for transparency tint. Default 1.0 (transmission carries the look). */
+  readonly alpha?: number;
+}
+
+export interface PaperLabelParams {
+  /** RGB triple (0..1). Default white. */
+  readonly baseColor?: readonly [number, number, number];
+  /** Roughness 0..1. Default 0.7. */
+  readonly roughness?: number;
+}
+
+export interface GlossyWhiteParams {
+  /** RGB triple (0..1). Default white. */
+  readonly baseColor?: readonly [number, number, number];
+  /** Roughness 0..1. Default 0.1. */
+  readonly roughness?: number;
+}
+
+export interface BrushedMetalParams {
+  /** RGB triple (0..1). Default light gray. */
+  readonly baseColor?: readonly [number, number, number];
+  /** Roughness 0..1. Default 0.35. */
+  readonly roughness?: number;
+  /** Metallic 0..1. Default 1.0. */
+  readonly metallic?: number;
+  /** Anisotropic 0..1. Default 0.6. */
+  readonly anisotropic?: number;
+}
+
+export interface GlassParams {
+  /** RGB triple (0..1). Default near-white. */
+  readonly baseColor?: readonly [number, number, number];
+  /** IOR. Default 1.52. */
+  readonly ior?: number;
+  /** Roughness 0..1. Default 0.0. */
+  readonly roughness?: number;
+}
+
+/**
+ * Union of all material parameter shapes accepted by `emitMaterialById`.
+ *
+ * Note: each emitter only reads the keys it understands; passing a superset is
+ * safe.
+ */
+export interface AnyMaterialParams {
+  readonly baseColor?: readonly [number, number, number];
+  readonly roughness?: number;
+  readonly metallic?: number;
+  readonly alpha?: number;
+  readonly ior?: number;
+  readonly anisotropic?: number;
+}
+
 export interface Preview1080pParams {
   /** Override sample count. Default 64. */
   readonly samples?: number;
@@ -66,10 +124,10 @@ export interface RenderShotParams extends Preview1080pParams {
 export interface ApplyMaterialParams {
   /** Object name to assign material to. Falls back to active object. */
   readonly target: string;
-  /** Recipe ID, e.g. "matte-clay". */
+  /** Recipe ID, e.g. "matte-clay" / "clear-plastic" / "glass". */
   readonly materialId: string;
-  /** Optional matte-clay overrides. */
-  readonly materialParams?: MatteClayParams;
+  /** Optional material overrides. Keys honored vary by material. */
+  readonly materialParams?: AnyMaterialParams;
 }
 
 export interface StudioSetWaterBottleParams {
@@ -257,14 +315,121 @@ export function emitMatteClay(params: MatteClayParams = {}): string {
   const roughness = params.roughness ?? 0.7;
 
   return `# PipelineKit recipe: material:matte-clay
-PK_MATTE_CLAY_NAME = "PK_matte_clay"
-_pk_clay = _pk_get_or_create_material(PK_MATTE_CLAY_NAME)
+_pk_clay = _pk_get_or_create_material("PK_matte_clay")
 _pk_clay_bsdf = _pk_clay.node_tree.nodes.get("Principled BSDF")
 if _pk_clay_bsdf is not None:
     _pk_clay_bsdf.inputs["Base Color"].default_value = (${pyTuple3(color).slice(1, -1)}, 1.0)
     _pk_clay_bsdf.inputs["Roughness"].default_value = ${pyFloat(roughness)}
     if "Metallic" in _pk_clay_bsdf.inputs:
         _pk_clay_bsdf.inputs["Metallic"].default_value = 0.0
+`;
+}
+
+export function emitClearPlastic(params: ClearPlasticParams = {}): string {
+  const color = params.baseColor ?? [0.95, 0.97, 1.0];
+  const roughness = params.roughness ?? 0.05;
+  const alpha = params.alpha ?? 1.0;
+
+  // Principled BSDF: transmission=1, ior=1.45, base color near-white, low roughness.
+  return `# PipelineKit recipe: material:clear-plastic
+_pk_clear_plastic = _pk_get_or_create_material("PK_clear_plastic")
+_pk_cp_bsdf = _pk_clear_plastic.node_tree.nodes.get("Principled BSDF")
+if _pk_cp_bsdf is not None:
+    _pk_cp_bsdf.inputs["Base Color"].default_value = (${pyTuple3(color).slice(1, -1)}, 1.0)
+    _pk_cp_bsdf.inputs["Roughness"].default_value = ${pyFloat(roughness)}
+    if "Metallic" in _pk_cp_bsdf.inputs:
+        _pk_cp_bsdf.inputs["Metallic"].default_value = 0.0
+    # Transmission input renamed across Blender versions; try both.
+    for _pk_name in ("Transmission Weight", "Transmission"):
+        if _pk_name in _pk_cp_bsdf.inputs:
+            _pk_cp_bsdf.inputs[_pk_name].default_value = 1.0
+            break
+    for _pk_name in ("IOR", "Index of Refraction"):
+        if _pk_name in _pk_cp_bsdf.inputs:
+            _pk_cp_bsdf.inputs[_pk_name].default_value = 1.45
+            break
+    if "Alpha" in _pk_cp_bsdf.inputs:
+        _pk_cp_bsdf.inputs["Alpha"].default_value = ${pyFloat(alpha)}
+if hasattr(_pk_clear_plastic, "blend_method"):
+    _pk_clear_plastic.blend_method = "BLEND"
+`;
+}
+
+export function emitPaperLabel(params: PaperLabelParams = {}): string {
+  const color = params.baseColor ?? [1.0, 1.0, 1.0];
+  const roughness = params.roughness ?? 0.7;
+
+  return `# PipelineKit recipe: material:paper-label
+_pk_paper = _pk_get_or_create_material("PK_paper_label")
+_pk_paper_bsdf = _pk_paper.node_tree.nodes.get("Principled BSDF")
+if _pk_paper_bsdf is not None:
+    _pk_paper_bsdf.inputs["Base Color"].default_value = (${pyTuple3(color).slice(1, -1)}, 1.0)
+    _pk_paper_bsdf.inputs["Roughness"].default_value = ${pyFloat(roughness)}
+    if "Metallic" in _pk_paper_bsdf.inputs:
+        _pk_paper_bsdf.inputs["Metallic"].default_value = 0.0
+`;
+}
+
+export function emitGlossyWhite(params: GlossyWhiteParams = {}): string {
+  const color = params.baseColor ?? [1.0, 1.0, 1.0];
+  const roughness = params.roughness ?? 0.1;
+
+  return `# PipelineKit recipe: material:glossy-white
+_pk_glossy = _pk_get_or_create_material("PK_glossy_white")
+_pk_glossy_bsdf = _pk_glossy.node_tree.nodes.get("Principled BSDF")
+if _pk_glossy_bsdf is not None:
+    _pk_glossy_bsdf.inputs["Base Color"].default_value = (${pyTuple3(color).slice(1, -1)}, 1.0)
+    _pk_glossy_bsdf.inputs["Roughness"].default_value = ${pyFloat(roughness)}
+    if "Metallic" in _pk_glossy_bsdf.inputs:
+        _pk_glossy_bsdf.inputs["Metallic"].default_value = 0.0
+`;
+}
+
+export function emitBrushedMetal(params: BrushedMetalParams = {}): string {
+  const color = params.baseColor ?? [0.78, 0.78, 0.8];
+  const roughness = params.roughness ?? 0.35;
+  const metallic = params.metallic ?? 1.0;
+  const anisotropic = params.anisotropic ?? 0.6;
+
+  // Anisotropic input was renamed in Blender 4.x ("Anisotropic" -> "Anisotropy").
+  return `# PipelineKit recipe: material:brushed-metal
+_pk_metal = _pk_get_or_create_material("PK_brushed_metal")
+_pk_metal_bsdf = _pk_metal.node_tree.nodes.get("Principled BSDF")
+if _pk_metal_bsdf is not None:
+    _pk_metal_bsdf.inputs["Base Color"].default_value = (${pyTuple3(color).slice(1, -1)}, 1.0)
+    _pk_metal_bsdf.inputs["Roughness"].default_value = ${pyFloat(roughness)}
+    if "Metallic" in _pk_metal_bsdf.inputs:
+        _pk_metal_bsdf.inputs["Metallic"].default_value = ${pyFloat(metallic)}
+    for _pk_name in ("Anisotropic", "Anisotropy"):
+        if _pk_name in _pk_metal_bsdf.inputs:
+            _pk_metal_bsdf.inputs[_pk_name].default_value = ${pyFloat(anisotropic)}
+            break
+`;
+}
+
+export function emitGlass(params: GlassParams = {}): string {
+  const color = params.baseColor ?? [0.95, 0.97, 1.0];
+  const ior = params.ior ?? 1.52;
+  const roughness = params.roughness ?? 0.0;
+
+  return `# PipelineKit recipe: material:glass
+_pk_glass = _pk_get_or_create_material("PK_glass")
+_pk_glass_bsdf = _pk_glass.node_tree.nodes.get("Principled BSDF")
+if _pk_glass_bsdf is not None:
+    _pk_glass_bsdf.inputs["Base Color"].default_value = (${pyTuple3(color).slice(1, -1)}, 1.0)
+    _pk_glass_bsdf.inputs["Roughness"].default_value = ${pyFloat(roughness)}
+    if "Metallic" in _pk_glass_bsdf.inputs:
+        _pk_glass_bsdf.inputs["Metallic"].default_value = 0.0
+    for _pk_name in ("Transmission Weight", "Transmission"):
+        if _pk_name in _pk_glass_bsdf.inputs:
+            _pk_glass_bsdf.inputs[_pk_name].default_value = 1.0
+            break
+    for _pk_name in ("IOR", "Index of Refraction"):
+        if _pk_name in _pk_glass_bsdf.inputs:
+            _pk_glass_bsdf.inputs[_pk_name].default_value = ${pyFloat(ior)}
+            break
+if hasattr(_pk_glass, "blend_method"):
+    _pk_glass.blend_method = "BLEND"
 `;
 }
 
@@ -311,15 +476,15 @@ export function emitStudioSetWaterBottle(params: StudioSetWaterBottleParams = {}
 
 /**
  * Apply a material recipe to a target object. Falls back to the active object
- * if the named target cannot be resolved.
+ * if the named target cannot be resolved. Resolves the correct material data-
+ * block name from the materialId so each procedural recipe is honored.
  */
 export function emitApplyMaterial(params: ApplyMaterialParams): string {
   const target = params.target;
   const materialId = params.materialId;
 
-  // Material codegen produces `_pk_clay` (matte-clay). For the v1 we map all
-  // material recipe IDs onto matte-clay; future materials slot in here.
   const materialPython = emitMaterialById(materialId, params.materialParams);
+  const materialName = resolveMaterialDataBlockName(materialId);
 
   return [
     materialPython,
@@ -330,9 +495,9 @@ export function emitApplyMaterial(params: ApplyMaterialParams): string {
     `    _pk_target = bpy.context.active_object`,
     `if _pk_target is None or not hasattr(_pk_target, "data") or _pk_target.data is None or not hasattr(_pk_target.data, "materials"):`,
     `    raise ValueError("apply_material: no valid target object (looked for " + ${pyStr(target)} + ")")`,
-    `_pk_apply_mat = bpy.data.materials.get(PK_MATTE_CLAY_NAME)`,
+    `_pk_apply_mat = bpy.data.materials.get(${pyStr(materialName)})`,
     `if _pk_apply_mat is None:`,
-    `    raise RuntimeError("apply_material: material PK_matte_clay was not created")`,
+    `    raise RuntimeError("apply_material: material ${materialName} was not created")`,
     `if len(_pk_target.data.materials) == 0:`,
     `    _pk_target.data.materials.append(_pk_apply_mat)`,
     `else:`,
@@ -341,21 +506,84 @@ export function emitApplyMaterial(params: ApplyMaterialParams): string {
 }
 
 /**
- * Resolve a material recipe ID to its codegen. Currently only `matte-clay` is
- * supported; unknown IDs default to matte-clay so callers stay functional.
+ * Resolve a material recipe ID to its codegen. Supported IDs cover the full
+ * `proceduralMaterialId` Zod enum. Unknown IDs default to matte-clay so
+ * callers stay functional.
  */
-export function emitMaterialById(materialId: string, params?: MatteClayParams): string {
+export function emitMaterialById(materialId: string, params?: AnyMaterialParams): string {
+  const normalized = normalizeMaterialId(materialId);
+  const p = params ?? {};
+
+  switch (normalized) {
+    case "clear-plastic":
+      return emitClearPlastic({
+        baseColor: p.baseColor,
+        roughness: p.roughness,
+        alpha: p.alpha
+      });
+    case "paper-label":
+      return emitPaperLabel({
+        baseColor: p.baseColor,
+        roughness: p.roughness
+      });
+    case "glossy-white":
+      return emitGlossyWhite({
+        baseColor: p.baseColor,
+        roughness: p.roughness
+      });
+    case "brushed-metal":
+    case "brushed-aluminum":
+      return emitBrushedMetal({
+        baseColor: p.baseColor,
+        roughness: p.roughness,
+        metallic: p.metallic,
+        anisotropic: p.anisotropic
+      });
+    case "glass":
+      return emitGlass({
+        baseColor: p.baseColor,
+        roughness: p.roughness,
+        ior: p.ior
+      });
+    case "matte-clay":
+    default:
+      return emitMatteClay({
+        baseColor: p.baseColor,
+        roughness: p.roughness
+      });
+  }
+}
+
+/**
+ * Map a normalized material id back to the Blender data-block name that
+ * `emitMaterialById` will create.
+ */
+function resolveMaterialDataBlockName(materialId: string): string {
+  const normalized = normalizeMaterialId(materialId);
+  switch (normalized) {
+    case "clear-plastic":
+      return "PK_clear_plastic";
+    case "paper-label":
+      return "PK_paper_label";
+    case "glossy-white":
+      return "PK_glossy_white";
+    case "brushed-metal":
+    case "brushed-aluminum":
+      return "PK_brushed_metal";
+    case "glass":
+      return "PK_glass";
+    case "matte-clay":
+    default:
+      return "PK_matte_clay";
+  }
+}
+
+function normalizeMaterialId(materialId: string): string {
   // Accept variants: "material:matte-clay", "matte-clay", "matte_clay".
-  const normalized = materialId
+  return materialId
     .toLowerCase()
     .replace(/^material:/, "")
     .replace(/_/g, "-");
-
-  switch (normalized) {
-    case "matte-clay":
-    default:
-      return emitMatteClay(params ?? {});
-  }
 }
 
 /**

@@ -259,11 +259,12 @@ function resolveRenderShotPath(operation: RenderShotOperation): string {
 }
 
 function scriptForApplyMaterial(operation: ApplyMaterialOperation): string {
-  // Default to matte-clay (the only recipe-codegen material in v1).
+  // Default to matte-clay if no procedural id is provided.
   const materialId = operation.params.proceduralMaterialId ?? "matte-clay";
   const target = operation.params.targetObject || "Subject";
 
-  // Optional roughness/baseColor overrides flow into matte-clay codegen.
+  // Pass through every override the Zod op accepts; emitMaterialById picks the
+  // keys each recipe knows how to honor.
   const baseColor = parseHexColor(operation.params.color);
   const recipeBody = emitApplyMaterial({
     target,
@@ -272,6 +273,12 @@ function scriptForApplyMaterial(operation: ApplyMaterialOperation): string {
       ...(baseColor ? { baseColor } : {}),
       ...(typeof operation.params.roughness === "number"
         ? { roughness: operation.params.roughness }
+        : {}),
+      ...(typeof operation.params.metallic === "number"
+        ? { metallic: operation.params.metallic }
+        : {}),
+      ...(typeof operation.params.alpha === "number"
+        ? { alpha: operation.params.alpha }
         : {})
     }
   });
