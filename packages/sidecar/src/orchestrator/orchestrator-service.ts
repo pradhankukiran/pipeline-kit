@@ -23,7 +23,10 @@ import {
   type SidecarState
 } from "../server/state.js";
 import { createApprovalGate } from "./approval-gate.js";
-import { BlenderStepExecutor } from "./blender-step-executor.js";
+import {
+  BlenderStepExecutor,
+  type BlenderOperationCallContext
+} from "./blender-step-executor.js";
 import { ModelStepExecutor } from "./model-step-executor.js";
 import { PipelineOrchestrator } from "./pipeline-orchestrator.js";
 
@@ -77,7 +80,10 @@ export class OrchestratorService {
     opts?: OrchestratorRunOptions
   ): Promise<OrchestratorRunResult> {
     const projectId = opts?.projectId ?? this.state.activeProjectId ?? null;
-    const enrichedDefinition = injectProjectIdIntoSteps(definition, projectId);
+    const enrichedDefinition = injectRunIdIntoSteps(
+      injectProjectIdIntoSteps(definition, projectId),
+      definition.id
+    );
 
     const lanes = collectLanes(enrichedDefinition);
     const executors = this.buildExecutors(lanes);
@@ -124,7 +130,10 @@ export class OrchestratorService {
     opts?: OrchestratorRunOptions
   ): OrchestratorAsyncSubmission {
     const projectId = opts?.projectId ?? this.state.activeProjectId ?? null;
-    const enrichedDefinition = injectProjectIdIntoSteps(definition, projectId);
+    const enrichedDefinition = injectRunIdIntoSteps(
+      injectProjectIdIntoSteps(definition, projectId),
+      definition.id
+    );
     const runId = enrichedDefinition.id;
 
     const startedAt = new Date().toISOString();
@@ -217,10 +226,17 @@ export class OrchestratorService {
     }
 
     const newRunId = `${originalRunId}-rerun-${Date.now()}`;
-    const newDefinition: PipelineDefinition = {
-      ...definition,
-      id: newRunId
-    };
+    // Replace any pre-existing `metadata.runId` (which would still point at
+    // the original run) with the new runId so progress events emitted from
+    // bpy land on the new run's SSE stream.
+    const newDefinition: PipelineDefinition = injectRunIdIntoSteps(
+      {
+        ...definition,
+        id: newRunId
+      },
+      newRunId,
+      { override: true }
+    );
     const projectId = original.projectId;
     const promptCandidate =
       typeof opts?.prompt === "string" && opts.prompt.length > 0
@@ -496,12 +512,23 @@ export class OrchestratorService {
           operationRunner: {
             runOperation: (
               operation: BlenderOperation,
-              options?: { readonly onProgress?: (chunk: string) => void }
-            ) =>
-              this.blender.runOperation(
-                operation as unknown as JsonOperation,
-                options?.onProgress ? { onProgress: options.onProgress } : {}
-              )
+              options?: {
+                readonly onProgress?: (chunk: string) => void;
+                readonly context?: BlenderOperationCallContext;
+              }
+            ) => {
+              const forward: {
+                onProgress?: (chunk: string) => void;
+                context?: BlenderOperationCallContext;
+              } = {};
+              if (options?.onProgress) {
+                forward.onProgress = options.onProgress;
+              }
+              if (options?.context) {
+                forward.context = options.context;
+              }
+              return this.blender.runOperation(operation as unknown as JsonOperation, forward);
+            }
           },
           mcpClient: mcpClientShim,
           gate: createApprovalGate(this.state),
@@ -591,6 +618,44 @@ function injectProjectIdIntoSteps(
     return {
       ...step,
       metadata: { ...metadata, projectId }
+    };
+  });
+
+  return {
+    ...definition,
+    steps
+  };
+}
+
+/**
+ * Injects `runId` into every step's `metadata` so the Blender executor can
+ * thread it into the bpy-side prelude (which posts back to
+ * `POST /blender/progress`). By default existing `metadata.runId` values are
+ * preserved — set `override: true` to replace them (used by the rerun path so
+ * stale runIds from the original run don't leak into the new run's SSE).
+ */
+function injectRunIdIntoSteps(
+  definition: PipelineDefinition,
+  runId: ID,
+  options: { readonly override?: boolean } = {}
+): PipelineDefinition {
+  if (typeof runId !== "string" || runId.length === 0) {
+    return definition;
+  }
+
+  const override = options.override === true;
+  const steps = definition.steps.map((step): PipelineStep => {
+    const metadata = step.metadata ?? {};
+    if (
+      !override &&
+      typeof metadata["runId"] === "string" &&
+      (metadata["runId"] as string).length > 0
+    ) {
+      return step;
+    }
+    return {
+      ...step,
+      metadata: { ...metadata, runId }
     };
   });
 

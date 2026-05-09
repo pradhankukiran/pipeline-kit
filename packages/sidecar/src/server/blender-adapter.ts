@@ -4,7 +4,11 @@ import {
   type BlenderMcpClient,
   type BlenderMcpResult
 } from "../blender/mcp-client.js";
-import { BlenderOperationRunner, buildBlenderPythonScript } from "../blender/operation-runner.js";
+import {
+  BlenderOperationRunner,
+  buildBlenderPythonScript,
+  type BlenderOperationRunContext
+} from "../blender/operation-runner.js";
 import type { JsonOperation, SidecarSettings, SidecarState } from "./state.js";
 
 export interface BlenderToolInfo {
@@ -89,7 +93,10 @@ export class BlenderOperationAdapter {
 
   async runOperation(
     operation: JsonOperation,
-    options: { readonly onProgress?: (chunk: string) => void } = {}
+    options: {
+      readonly onProgress?: (chunk: string) => void;
+      readonly context?: BlenderOperationRunContext;
+    } = {}
   ): Promise<OperationResult> {
     if (!this.state.blender.connected) {
       return createFallbackResult(operation, this.state.blender.lastError);
@@ -101,8 +108,18 @@ export class BlenderOperationAdapter {
         scriptToolName: readScriptToolName(),
         scriptArgumentName: readScriptArgumentName()
       });
+      const runOptions: {
+        onProgress?: (chunk: string) => void;
+        context?: BlenderOperationRunContext;
+      } = {};
+      if (options.onProgress) {
+        runOptions.onProgress = options.onProgress;
+      }
+      if (options.context) {
+        runOptions.context = options.context;
+      }
       const run = await withTimeout(
-        runner.run(operation, options.onProgress ? { onProgress: options.onProgress } : undefined),
+        runner.run(operation, runOptions),
         this.timeoutMs,
         "Blender MCP operation"
       );

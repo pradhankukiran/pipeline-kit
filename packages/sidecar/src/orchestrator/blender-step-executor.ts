@@ -14,10 +14,24 @@ import type {
 import type { SidecarState } from "../server/state.js";
 import type { ApprovalGate } from "./approval-gate.js";
 
+/**
+ * Optional context threaded into a Blender operation invocation. Today this
+ * carries `runId` and `stepId` so the bpy-side prelude can post `step.progress`
+ * back to the sidecar via `POST /blender/progress`. Callers may add fields
+ * (e.g. an in-flight AbortSignal) without breaking existing implementations.
+ */
+export interface BlenderOperationCallContext {
+  readonly runId?: string;
+  readonly stepId?: string;
+}
+
 export interface BlenderOperationCallable {
   runOperation(
     operation: BlenderOperation,
-    options?: { readonly onProgress?: (chunk: string) => void }
+    options?: {
+      readonly onProgress?: (chunk: string) => void;
+      readonly context?: BlenderOperationCallContext;
+    }
   ): Promise<OperationResult>;
 }
 
@@ -122,13 +136,24 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
     }
 
     const onProgress = buildBlenderProgressHandler(context);
+    const callContext = buildBlenderCallContext(context, metadata);
 
     const runOp = async (): Promise<unknown> => {
       if (validatedOperation) {
         // operationRunner presence is guaranteed above when validatedOperation is set.
+        const runOptions: {
+          onProgress?: (chunk: string) => void;
+          context?: BlenderOperationCallContext;
+        } = {};
+        if (onProgress) {
+          runOptions.onProgress = onProgress;
+        }
+        if (callContext) {
+          runOptions.context = callContext;
+        }
         const result = await this.operationRunner!.runOperation(
           validatedOperation,
-          onProgress ? { onProgress } : undefined
+          Object.keys(runOptions).length > 0 ? runOptions : undefined
         );
         if (result.status !== "succeeded") {
           throw new Error(result.error ?? result.summary);
@@ -444,6 +469,31 @@ function readApprovalTimeoutMs(): number {
     }
   }
   return DEFAULT_APPROVAL_TIMEOUT_MS;
+}
+
+/**
+ * Resolves the `BlenderOperationCallContext` baked into the emitted Python.
+ * Reads `metadata.runId` (injected by `OrchestratorService.spawnAsyncRun`)
+ * and uses `context.step.id` as the stepId. Returns `undefined` when neither
+ * id is present — keeps unit-test contexts free of orphan handlers.
+ */
+function buildBlenderCallContext(
+  context: PipelineStepContext,
+  metadata: Record<string, unknown>
+): BlenderOperationCallContext | undefined {
+  const runIdRaw = metadata["runId"];
+  const runId = typeof runIdRaw === "string" && runIdRaw.length > 0 ? runIdRaw : undefined;
+  const stepId =
+    typeof context.step.id === "string" && context.step.id.length > 0
+      ? context.step.id
+      : undefined;
+  if (!runId && !stepId) {
+    return undefined;
+  }
+  return {
+    ...(runId ? { runId } : {}),
+    ...(stepId ? { stepId } : {})
+  };
 }
 
 /**

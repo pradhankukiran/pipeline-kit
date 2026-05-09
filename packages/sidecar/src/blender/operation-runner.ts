@@ -49,6 +49,18 @@ export interface BlenderOperationRunResult {
   readonly result: OperationResult;
 }
 
+/**
+ * Optional context threaded into the emitted Python so a Blender-side handler
+ * can post `step.progress` events back to the sidecar via
+ * `POST /blender/progress`. When `runId`/`stepId` are absent (or empty) the
+ * baked-in handlers are no-ops so the progress reporter has zero overhead in
+ * standalone-runner test paths.
+ */
+export interface BlenderOperationRunContext {
+  readonly runId?: string;
+  readonly stepId?: string;
+}
+
 const DEFAULT_SCRIPT_TOOL_NAME = "execute_blender_code";
 const DEFAULT_SCRIPT_ARGUMENT_NAME = "code";
 
@@ -63,9 +75,9 @@ export class BlenderOperationRunner {
     this.scriptArgumentName = options.scriptArgumentName ?? DEFAULT_SCRIPT_ARGUMENT_NAME;
   }
 
-  buildScript(operation: unknown): BlenderOperationScript {
+  buildScript(operation: unknown, context?: BlenderOperationRunContext): BlenderOperationScript {
     const validated = validateBlenderOperation(operation);
-    const script = buildBlenderPythonScript(validated);
+    const script = buildBlenderPythonScript(validated, context);
 
     return {
       operation: validated,
@@ -81,9 +93,12 @@ export class BlenderOperationRunner {
 
   async run(
     operation: unknown,
-    options: { readonly onProgress?: (chunk: string) => void } = {}
+    options: {
+      readonly onProgress?: (chunk: string) => void;
+      readonly context?: BlenderOperationRunContext;
+    } = {}
   ): Promise<BlenderOperationRunResult> {
-    const prepared = this.buildScript(operation);
+    const prepared = this.buildScript(operation, options.context);
     const command: BlenderMcpCommand = options.onProgress
       ? { ...prepared.command, onProgress: options.onProgress }
       : prepared.command;
@@ -108,29 +123,37 @@ export class BlenderOperationRunner {
   }
 }
 
-export function buildBlenderPythonScript(operation: BlenderOperation): string {
+export function buildBlenderPythonScript(
+  operation: BlenderOperation,
+  context?: BlenderOperationRunContext
+): string {
   switch (operation.type) {
     case "create_scene":
-      return scriptForCreateScene(operation);
+      return scriptForCreateScene(operation, context);
     case "create_studio_set":
-      return scriptForCreateStudioSet(operation);
+      return scriptForCreateStudioSet(operation, context);
     case "create_lighting_rig":
-      return scriptForCreateLightingRig(operation);
+      return scriptForCreateLightingRig(operation, context);
     case "create_camera_rig":
-      return scriptForCreateCameraRig(operation);
+      return scriptForCreateCameraRig(operation, context);
     case "inspect_scene":
-      return scriptForInspectScene(operation);
+      return scriptForInspectScene(operation, context);
     case "save_checkpoint":
-      return scriptForSaveCheckpoint(operation);
+      return scriptForSaveCheckpoint(operation, context);
     case "render_shot":
-      return scriptForRenderShot(operation);
+      return scriptForRenderShot(operation, context);
     case "apply_material":
-      return scriptForApplyMaterial(operation);
+      return scriptForApplyMaterial(operation, context);
   }
 }
 
-function scriptForCreateScene(operation: CreateSceneOperation): string {
-  return wrapScript(operation, String.raw`
+function scriptForCreateScene(
+  operation: CreateSceneOperation,
+  context?: BlenderOperationRunContext
+): string {
+  return wrapScript(
+    operation,
+    String.raw`
 if params["clearExisting"]:
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete()
@@ -144,10 +167,15 @@ bpy.context.scene.view_settings.look = "Medium High Contrast"
 bpy.context.scene.world = bpy.context.scene.world or bpy.data.worlds.new("World")
 bpy.context.scene.world.color = (1.0, 1.0, 1.0)
 print(json.dumps({"operation": operation["type"], "scene": bpy.context.scene.name}))
-`);
+`,
+    context
+  );
 }
 
-function scriptForCreateStudioSet(operation: CreateStudioSetOperation): string {
+function scriptForCreateStudioSet(
+  operation: CreateStudioSetOperation,
+  context?: BlenderOperationRunContext
+): string {
   const recipeId = operation.params.recipeId;
   // Each recipeId in the Zod enum maps to a distinct emitter:
   // - water_bottle_product_viz -> full composite scene
@@ -177,11 +205,15 @@ function scriptForCreateStudioSet(operation: CreateStudioSetOperation): string {
     operation,
     `${recipeBody}
 print(json.dumps({"operation": operation["type"], "recipeId": ${JSON.stringify(recipeId)}}))
-`
+`,
+    context
   );
 }
 
-function scriptForCreateLightingRig(operation: CreateLightingRigOperation): string {
+function scriptForCreateLightingRig(
+  operation: CreateLightingRigOperation,
+  context?: BlenderOperationRunContext
+): string {
   // Each Zod preset defines its own (key, fill, rim) wattage trio. The
   // operation's `intensity` is then a uniform multiplier on the final powers.
   const intensity = operation.params.intensity ?? 1;
@@ -207,11 +239,15 @@ function scriptForCreateLightingRig(operation: CreateLightingRigOperation): stri
     operation,
     `${recipeBody}
 print(json.dumps({"operation": operation["type"], "preset": ${JSON.stringify(operation.params.preset)}, "lights": [o.name for o in bpy.context.scene.objects if o.type == "LIGHT"]}))
-`
+`,
+    context
   );
 }
 
-function scriptForCreateCameraRig(operation: CreateCameraRigOperation): string {
+function scriptForCreateCameraRig(
+  operation: CreateCameraRigOperation,
+  context?: BlenderOperationRunContext
+): string {
   // Honor every value of the cameraMove Zod enum (static / orbit / dolly /
   // push_in). Default to "static" when unset.
   const cameraMove = operation.params.cameraMove ?? "static";
@@ -239,12 +275,18 @@ function scriptForCreateCameraRig(operation: CreateCameraRigOperation): string {
 bpy.context.scene.render.resolution_x = ${width}
 bpy.context.scene.render.resolution_y = ${height}
 print(json.dumps({"operation": operation["type"], "camera": "PK_camera", "resolution": [${width}, ${height}]}))
-`
+`,
+    context
   );
 }
 
-function scriptForInspectScene(operation: InspectSceneOperation): string {
-  return wrapScript(operation, String.raw`
+function scriptForInspectScene(
+  operation: InspectSceneOperation,
+  context?: BlenderOperationRunContext
+): string {
+  return wrapScript(
+    operation,
+    String.raw`
 report = {"scene": bpy.context.scene.name}
 if params["includeObjects"]:
     report["objects"] = [{"name": o.name, "type": o.type} for o in bpy.context.scene.objects]
@@ -257,10 +299,15 @@ if params["includeRenderSettings"]:
         "camera": bpy.context.scene.camera.name if bpy.context.scene.camera else None,
     }
 print(json.dumps({"operation": operation["type"], "report": report}, sort_keys=True))
-`);
+`,
+    context
+  );
 }
 
-function scriptForSaveCheckpoint(operation: SaveCheckpointOperation): string {
+function scriptForSaveCheckpoint(
+  operation: SaveCheckpointOperation,
+  context?: BlenderOperationRunContext
+): string {
   // Path policy:
   //   - If a .blend is open, save next to it via Blender's "//"-relative path
   //     (preserves the historical layout).
@@ -272,7 +319,9 @@ function scriptForSaveCheckpoint(operation: SaveCheckpointOperation): string {
   // (and downstream artifact consumers) can locate the saved file. When
   // includeBlendFile=false we still emit the label and resolved path but do
   // not write to disk — semantics unchanged from before.
-  return wrapScript(operation, String.raw`
+  return wrapScript(
+    operation,
+    String.raw`
 import os as _pk_os
 label = slug(params["label"])
 _pk_blend_filepath = bpy.data.filepath if hasattr(bpy.data, "filepath") else ""
@@ -288,10 +337,15 @@ else:
 if params["includeBlendFile"]:
     bpy.ops.wm.save_as_mainfile(filepath=save_target)
 print(json.dumps({"operation": operation["type"], "label": params["label"], "path": save_target, "absolutePath": absolute_path, "saved": params["includeBlendFile"]}))
-`);
+`,
+    context
+  );
 }
 
-function scriptForRenderShot(operation: RenderShotOperation): string {
+function scriptForRenderShot(
+  operation: RenderShotOperation,
+  context?: BlenderOperationRunContext
+): string {
   const samplesByQuality = { preview: 32, review: 96, final: 256 } as const;
   const samples = samplesByQuality[operation.params.quality];
 
@@ -313,7 +367,8 @@ function scriptForRenderShot(operation: RenderShotOperation): string {
       operation,
       `${recipeBody}
 print(json.dumps({"operation": operation["type"], "shotId": ${JSON.stringify(operation.params.shotId)}, "outputPath": _pk_render_output_dir, "quality": ${JSON.stringify(operation.params.quality)}, "animation": True, "framePrefix": _pk_render_frame_prefix, "frameStart": _pk_render_animation_frame_start, "frameEnd": _pk_render_animation_frame_end}))
-`
+`,
+      context
     );
   }
 
@@ -327,7 +382,8 @@ print(json.dumps({"operation": operation["type"], "shotId": ${JSON.stringify(ope
     operation,
     `${recipeBody}
 print(json.dumps({"operation": operation["type"], "shotId": ${JSON.stringify(operation.params.shotId)}, "outputPath": _pk_render_output_path, "quality": ${JSON.stringify(operation.params.quality)}}))
-`
+`,
+    context
   );
 }
 
@@ -372,7 +428,10 @@ function resolveRenderAnimationOutputForOp(
   return resolveRenderAnimationOutput(runId, opId);
 }
 
-function scriptForApplyMaterial(operation: ApplyMaterialOperation): string {
+function scriptForApplyMaterial(
+  operation: ApplyMaterialOperation,
+  context?: BlenderOperationRunContext
+): string {
   // Default to matte-clay if no procedural id is provided.
   const materialId = operation.params.proceduralMaterialId ?? "matte-clay";
   const target = operation.params.targetObject || "Subject";
@@ -401,7 +460,8 @@ function scriptForApplyMaterial(operation: ApplyMaterialOperation): string {
     operation,
     `${recipeBody}
 print(json.dumps({"operation": operation["type"], "target": _pk_target.name, "material": _pk_apply_mat.name}))
-`
+`,
+    context
   );
 }
 
@@ -419,23 +479,40 @@ function parseHexColor(value: string | undefined): [number, number, number] | un
   return [r, g, b];
 }
 
-function wrapScript(operation: BlenderOperation, body: string): string {
-  return `${pythonPrelude(operation)}\n${body.trim()}\n`;
+function wrapScript(
+  operation: BlenderOperation,
+  body: string,
+  context?: BlenderOperationRunContext
+): string {
+  return `${pythonPrelude(operation, context)}\n${body.trim()}\n`;
 }
 
-function wrapRecipeScript(operation: BlenderOperation, body: string): string {
-  return `${pythonPrelude(operation)}\n${emitRecipeHelpers()}\n${body.trim()}\n`;
+function wrapRecipeScript(
+  operation: BlenderOperation,
+  body: string,
+  context?: BlenderOperationRunContext
+): string {
+  return `${pythonPrelude(operation, context)}\n${emitRecipeHelpers()}\n${body.trim()}\n`;
 }
 
-function pythonPrelude(operation: BlenderOperation): string {
+function pythonPrelude(operation: BlenderOperation, context?: BlenderOperationRunContext): string {
+  const sidecarUrl = readSidecarUrlForBake();
+  const runId = typeof context?.runId === "string" ? context.runId : "";
+  const stepId = typeof context?.stepId === "string" ? context.stepId : "";
   return `import bpy
 import json
 import math
 import re
 import mathutils
+import urllib.request as _pk_urlreq
+import threading as _pk_threading
 
 operation = json.loads(${JSON.stringify(JSON.stringify(operation))})
 params = operation["params"]
+
+PIPELINEKIT_PROGRESS_URL = ${JSON.stringify(`${sidecarUrl}/blender/progress`)}
+PIPELINEKIT_RUN_ID = ${JSON.stringify(runId)}
+PIPELINEKIT_STEP_ID = ${JSON.stringify(stepId)}
 
 def slug(value):
     slugged = re.sub(r"[^A-Za-z0-9_]+", "_", str(value)).strip("_")
@@ -456,7 +533,88 @@ def kelvin_to_rgb(kelvin):
         green = 288.1221695283 * ((temp - 60) ** -0.0755148492)
         blue = 255
     return tuple(max(0, min(255, c)) / 255.0 for c in (red, green, blue))
+
+def _pk_post_progress(payload):
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        req = _pk_urlreq.Request(
+            PIPELINEKIT_PROGRESS_URL,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        _pk_urlreq.urlopen(req, timeout=1.0)
+    except Exception:
+        pass
+
+def _pk_progress_async(message=None, percent=None, data=None):
+    if not PIPELINEKIT_RUN_ID or not PIPELINEKIT_STEP_ID:
+        return
+    payload = {"runId": PIPELINEKIT_RUN_ID, "stepId": PIPELINEKIT_STEP_ID}
+    if message is not None:
+        payload["message"] = message
+    if percent is not None:
+        payload["percent"] = percent
+    if data is not None:
+        payload["data"] = data
+    _pk_threading.Thread(target=_pk_post_progress, args=(payload,), daemon=True).start()
+
+def _pk_render_pre(scene, *args, **kwargs):
+    _pk_progress_async(
+        message=f"Rendering frame {scene.frame_current}",
+        data={"frame": scene.frame_current},
+    )
+
+def _pk_render_post(scene, *args, **kwargs):
+    fs = getattr(scene, "frame_start", 1) or 1
+    fe = getattr(scene, "frame_end", 1) or 1
+    span = max(1, fe - fs + 1)
+    pct = max(0.0, min(100.0, ((scene.frame_current - fs + 1) / span) * 100.0))
+    _pk_progress_async(
+        message=f"Frame {scene.frame_current} done",
+        percent=pct,
+        data={"frame": scene.frame_current, "frameStart": fs, "frameEnd": fe},
+    )
+
+def _pk_render_complete(scene, *args, **kwargs):
+    _pk_progress_async(message="Render complete", percent=100.0)
+
+def _pk_install_progress_handlers():
+    if not PIPELINEKIT_RUN_ID or not PIPELINEKIT_STEP_ID:
+        return
+    if _pk_render_pre not in bpy.app.handlers.render_pre:
+        bpy.app.handlers.render_pre.append(_pk_render_pre)
+    if _pk_render_post not in bpy.app.handlers.render_post:
+        bpy.app.handlers.render_post.append(_pk_render_post)
+    if _pk_render_complete not in bpy.app.handlers.render_complete:
+        bpy.app.handlers.render_complete.append(_pk_render_complete)
+
+_pk_install_progress_handlers()
 `;
+}
+
+/**
+ * Resolves the sidecar URL baked into the emitted Python's
+ * `_pk_post_progress` calls. Order of precedence:
+ *   1. `PIPELINEKIT_SIDECAR_URL` (full base URL, e.g. `http://10.0.0.5:4317`).
+ *   2. `http://127.0.0.1:<PIPELINEKIT_SIDECAR_PORT>` if the port env is set.
+ *   3. The default `http://127.0.0.1:4317`.
+ *
+ * Trailing slashes are stripped so callers can safely append `/blender/progress`.
+ */
+function readSidecarUrlForBake(): string {
+  const explicit = process.env["PIPELINEKIT_SIDECAR_URL"];
+  if (typeof explicit === "string" && explicit.trim().length > 0) {
+    return explicit.trim().replace(/\/+$/g, "");
+  }
+  const port = process.env["PIPELINEKIT_SIDECAR_PORT"];
+  if (typeof port === "string" && port.trim().length > 0) {
+    const parsed = Number(port);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return `http://127.0.0.1:${parsed}`;
+    }
+  }
+  return "http://127.0.0.1:4317";
 }
 
 function createOperationResult(
