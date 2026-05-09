@@ -916,12 +916,25 @@ export type ProjectRecord = {
   updatedAt: string;
 };
 
+/**
+ * Mirrors the sidecar core `ApprovalStatus` union. The 'cancelled' state is
+ * auto-set by the approval gate when the surrounding pipeline run is aborted
+ * while a step approval is still pending; the UI must accept it on /approvals
+ * responses (and on /approvals?status=cancelled queries) without coercing it
+ * to 'rejected'.
+ */
+export type ApprovalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled";
+
 export type ApprovalRecord = {
   id: string;
   projectId: string;
   kind: string;
   summary: string;
-  status: "pending" | "approved" | "rejected";
+  status: ApprovalStatus;
   payload?: unknown;
   createdAt: string;
   decidedAt?: string;
@@ -1126,7 +1139,7 @@ export async function importProject(
 
 export async function listApprovals(filter?: {
   projectId?: string;
-  status?: "pending" | "approved" | "rejected";
+  status?: ApprovalStatus;
 }): Promise<{ approvals: ApprovalRecord[] }> {
   const params = new URLSearchParams();
   if (filter?.projectId) {
@@ -1154,7 +1167,11 @@ export async function createApproval(input: {
 
 export async function decideApproval(
   id: string,
-  body: { status: "approved" | "rejected"; reason?: string; decidedBy?: string }
+  body: {
+    status: "approved" | "rejected" | "cancelled";
+    reason?: string;
+    decidedBy?: string;
+  }
 ): Promise<{ approval: ApprovalRecord }> {
   return requestJsonOrThrow<{ approval: ApprovalRecord }>(
     `/approvals/${encodeURIComponent(id)}/decide`,

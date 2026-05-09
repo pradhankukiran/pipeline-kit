@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Ban,
   Check,
+  CircleSlash,
   Clock,
   ClipboardCheck,
   RefreshCw,
@@ -39,7 +40,12 @@ import {
 import type { OperationRecord } from "@/fallbackData";
 import { inferOutputPath, renderUrlFromOutputPath } from "@/lib/renderUrl";
 
-export type ApprovalStatusFilter = "pending" | "approved" | "rejected" | "all";
+export type ApprovalStatusFilter =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled"
+  | "all";
 
 export interface ReviewPanelProps {
   activeProjectId: string | null;
@@ -57,6 +63,7 @@ const TABS: { id: ApprovalStatusFilter; label: string }[] = [
   { id: "pending", label: "Pending" },
   { id: "approved", label: "Approved" },
   { id: "rejected", label: "Rejected" },
+  { id: "cancelled", label: "Cancelled" },
   { id: "all", label: "All" }
 ];
 
@@ -96,6 +103,20 @@ function StatusBadge({ status }: { status: ApprovalRecord["status"] }) {
       <Badge variant="destructive" className="inline-flex items-center gap-1">
         <Ban className="h-3 w-3 mr-1" aria-hidden />
         rejected
+      </Badge>
+    );
+  }
+  if (status === "cancelled") {
+    // Distinct from "rejected": the user did not deny the step — the
+    // surrounding run was cancelled while the gate was still polling.
+    // Italic + muted styling reinforces the auto-set, non-decided origin.
+    return (
+      <Badge
+        variant="outline"
+        className="inline-flex items-center gap-1 border-muted-foreground/40 text-muted-foreground italic"
+      >
+        <CircleSlash className="h-3 w-3 mr-1" aria-hidden />
+        cancelled
       </Badge>
     );
   }
@@ -222,16 +243,27 @@ function ApprovalRow({
   const [open, setOpen] = useState(false);
   const hasPayload =
     approval.payload !== undefined && approval.payload !== null;
+  const isCancelled = approval.status === "cancelled";
 
   return (
-    <div className="rounded-md border border-border p-3 space-y-2">
+    <div
+      className={cn(
+        "rounded-md border border-border p-3 space-y-2",
+        isCancelled && "border-dashed bg-muted/20 text-muted-foreground"
+      )}
+    >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1 space-y-2">
           <p className="text-[11px] uppercase tracking-wide font-medium text-muted-foreground">
             {approval.kind}
           </p>
           <div className="flex items-start gap-3">
-            <p className="text-sm font-medium break-words flex-1">
+            <p
+              className={cn(
+                "text-sm font-medium break-words flex-1",
+                isCancelled && "italic"
+              )}
+            >
               {approval.summary}
             </p>
             <StatusBadge status={approval.status} />
@@ -339,6 +371,13 @@ function emptyStateCopy(scope: ApprovalStatusFilter): {
     return {
       heading: "No rejected decisions yet.",
       description: "Rejected approvals will be listed here once decided."
+    };
+  }
+  if (scope === "cancelled") {
+    return {
+      heading: "No cancelled approvals yet.",
+      description:
+        "Approvals auto-cancelled by run cancellation will be listed here."
     };
   }
   return {
