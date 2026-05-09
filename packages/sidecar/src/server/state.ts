@@ -42,6 +42,13 @@ export interface BlenderMcpSettings {
 export interface SidecarSettings {
   readonly models: ModelSettings;
   readonly blender: BlenderMcpSettings;
+  /**
+   * Optional override (in seconds) for the approval gate's timeout. Persisted
+   * via the desktop Settings panel and read by `createApprovalGate` so the UI
+   * value beats the legacy `PIPELINEKIT_APPROVAL_TIMEOUT_MS` env var. Absent
+   * or non-positive → the gate falls back to env, then a 60s default.
+   */
+  readonly approvalTimeoutSec?: number;
 }
 
 export interface BlenderConnectionState {
@@ -188,8 +195,34 @@ export function updateSettings(current: SidecarSettings, patch: unknown): Sideca
         blender["autoCheckpoint"],
         current.blender.autoCheckpoint ?? true
       )
-    }
+    },
+    ...readApprovalTimeoutSec(patch["approvalTimeoutSec"], current.approvalTimeoutSec)
   };
+}
+
+/**
+ * Resolves the persisted approvalTimeoutSec field from a settings POST body.
+ * Returns either `{ approvalTimeoutSec: <positive int> }` to record the value
+ * or `{ approvalTimeoutSec: undefined }` to explicitly clear it. A missing
+ * field on the patch keeps the current value. We spread the result into the
+ * surrounding object so callers don't add a stray `approvalTimeoutSec: undefined`
+ * when the field is left untouched.
+ */
+function readApprovalTimeoutSec(
+  value: unknown,
+  fallback: number | undefined
+): { approvalTimeoutSec?: number } {
+  if (value === undefined) {
+    return fallback !== undefined ? { approvalTimeoutSec: fallback } : {};
+  }
+  if (value === null) {
+    return {};
+  }
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return { approvalTimeoutSec: Math.floor(value) };
+  }
+  // Any other value (0, negative, NaN, string, etc.) → clear the override.
+  return {};
 }
 
 export function recordOperation(
@@ -411,6 +444,15 @@ function wrapWithPersistence(state: SidecarState, store: JsonFileStore): Sidecar
 }
 
 function mergeSettings(base: SidecarSettings, persisted: SidecarSettings): SidecarSettings {
+  // Treat any non-positive / non-finite persisted value as "absent" so a stale
+  // 0 or NaN cannot accidentally override the env / default precedence in the
+  // approval gate. Positive numbers are floored so we always store integers.
+  const persistedApprovalTimeoutSec =
+    typeof persisted.approvalTimeoutSec === "number" &&
+    Number.isFinite(persisted.approvalTimeoutSec) &&
+    persisted.approvalTimeoutSec > 0
+      ? Math.floor(persisted.approvalTimeoutSec)
+      : undefined;
   return {
     models: {
       groqModel: persisted.models?.groqModel ?? base.models.groqModel,
@@ -425,7 +467,10 @@ function mergeSettings(base: SidecarSettings, persisted: SidecarSettings): Sidec
           : base.models.openRouterApiKey,
       codexModel: persisted.models?.codexModel ?? base.models.codexModel
     },
-    blender: mergeBlenderSettings(base.blender, persisted.blender)
+    blender: mergeBlenderSettings(base.blender, persisted.blender),
+    ...(persistedApprovalTimeoutSec !== undefined
+      ? { approvalTimeoutSec: persistedApprovalTimeoutSec }
+      : {})
   };
 }
 

@@ -46,14 +46,52 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_POLL_MS = 500;
 
 /**
+ * Resolves the effective approval-gate timeout (in milliseconds) using the
+ * documented precedence:
+ *
+ *   1. `state.settings.approvalTimeoutSec` (× 1000) when set and positive.
+ *      Persisted by the desktop Settings panel; this is the source of truth.
+ *   2. `process.env.PIPELINEKIT_APPROVAL_TIMEOUT_MS` when set and positive.
+ *      Legacy escape hatch for headless deploys.
+ *   3. The 60-second default.
+ *
+ * The `state` argument is optional so callers (and tests) can compute a value
+ * without instantiating a full sidecar state.
+ */
+export function readApprovalTimeoutMs(state?: SidecarState): number {
+  const fromState = state?.settings?.approvalTimeoutSec;
+  if (typeof fromState === "number" && Number.isFinite(fromState) && fromState > 0) {
+    return Math.floor(fromState * 1000);
+  }
+  const raw = process.env["PIPELINEKIT_APPROVAL_TIMEOUT_MS"];
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_TIMEOUT_MS;
+}
+
+/**
  * Builds an `ApprovalGate` bound to the supplied sidecar state. The gate
  * registers a pending approval via `addApproval` and polls `state.approvals`
  * until either the user decides (`approved`/`rejected`) or the timeout
  * elapses, in which case it auto-rejects the approval as a system decision.
+ *
+ * Timeout precedence inside the closure (highest first):
+ *   1. `state.settings.approvalTimeoutSec` — UI-driven override.
+ *   2. `input.timeoutMs` — per-call value supplied by the executor.
+ *   3. `PIPELINEKIT_APPROVAL_TIMEOUT_MS` env var.
+ *   4. 60-second default.
+ *
+ * This ordering lets the desktop Settings panel beat the legacy env-var path
+ * without requiring callers (e.g. `BlenderStepExecutor`) to be aware of the
+ * persisted setting.
  */
 export function createApprovalGate(state: SidecarState): ApprovalGate {
   return async function gate(input: ApprovalGateInput): Promise<ApprovalGateDecision> {
-    const timeoutMs = normalizePositive(input.timeoutMs, DEFAULT_TIMEOUT_MS);
+    const timeoutMs = resolveTimeoutMs(state, input.timeoutMs);
     const pollMs = normalizePositive(input.pollMs, DEFAULT_POLL_MS);
 
     const approval: Approval = {
@@ -142,4 +180,21 @@ function normalizePositive(value: number | undefined, fallback: number): number 
     return value;
   }
   return fallback;
+}
+
+/**
+ * Resolves the effective per-call timeout for the gate's wait loop. Prefers
+ * the persisted desktop setting (`state.settings.approvalTimeoutSec`), then
+ * the explicit per-call `input.timeoutMs`, then falls back to the env-var /
+ * default chain in `readApprovalTimeoutMs`.
+ */
+function resolveTimeoutMs(state: SidecarState, perCall: number | undefined): number {
+  const fromState = state.settings?.approvalTimeoutSec;
+  if (typeof fromState === "number" && Number.isFinite(fromState) && fromState > 0) {
+    return Math.floor(fromState * 1000);
+  }
+  if (typeof perCall === "number" && Number.isFinite(perCall) && perCall > 0) {
+    return perCall;
+  }
+  return readApprovalTimeoutMs(state);
 }
