@@ -23,7 +23,11 @@ export interface SettingsPanelProps {
   saving: boolean;
   disabled?: boolean;
   autoConnect: boolean;
+  autoCheckpoint: boolean;
+  approvalTimeoutSec: number;
   onAutoConnectChange: (value: boolean) => void;
+  onAutoCheckpointChange: (value: boolean) => void;
+  onApprovalTimeoutChange: (value: number) => void;
   onChange: (field: keyof PipelineSettings, value: string) => void;
   onSave: () => void | Promise<void>;
 }
@@ -40,7 +44,11 @@ export function SettingsPanel({
   saving,
   disabled = false,
   autoConnect,
+  autoCheckpoint,
+  approvalTimeoutSec,
   onAutoConnectChange,
+  onAutoCheckpointChange,
+  onApprovalTimeoutChange,
   onChange,
   onSave,
 }: SettingsPanelProps) {
@@ -140,6 +148,83 @@ export function SettingsPanel({
                   />
                 </span>
               </label>
+              <label className="flex items-center justify-between gap-3 rounded-md border border-border bg-secondary/30 px-3 py-2">
+                <span className="flex flex-col">
+                  <span className="text-sm font-medium">
+                    Auto-checkpoint after each Blender step
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Save a labeled checkpoint after every typed-op so you can
+                    rewind individual steps without rerunning the pipeline.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={autoCheckpoint}
+                  onChange={(event) =>
+                    onAutoCheckpointChange(event.target.checked)
+                  }
+                  className="peer sr-only"
+                  aria-label="Auto-checkpoint after each Blender step"
+                />
+                <span
+                  aria-hidden
+                  className={cn(
+                    "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-border bg-input transition-colors",
+                    "peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background",
+                    autoCheckpoint && "bg-primary"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "inline-block h-4 w-4 rounded-full bg-background shadow transition-transform",
+                      autoCheckpoint ? "translate-x-4" : "translate-x-0.5"
+                    )}
+                  />
+                </span>
+              </label>
+            </div>
+          </section>
+
+          <Separator />
+
+          {/* Approvals */}
+          <section className="space-y-3">
+            <div>
+              <h3 className="text-sm font-medium">Approvals</h3>
+              <p className="text-xs text-muted-foreground">
+                Auto-rejection policy for pending approvals.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="settings-approval-timeout">
+                Auto-reject pending approvals after (seconds)
+              </Label>
+              <Input
+                id="settings-approval-timeout"
+                type="number"
+                min={0}
+                step={1}
+                value={
+                  Number.isFinite(approvalTimeoutSec)
+                    ? String(approvalTimeoutSec)
+                    : "0"
+                }
+                onChange={(event) => {
+                  const next = Number.parseInt(event.target.value, 10);
+                  onApprovalTimeoutChange(
+                    Number.isFinite(next) && next >= 0 ? next : 0
+                  );
+                }}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              <p className="text-xs text-muted-foreground">
+                Set to 0 to disable. The sidecar reads
+                <code className="mx-1 font-mono">PIPELINEKIT_APPROVAL_TIMEOUT_MS</code>
+                today; this value is persisted alongside other settings and
+                will be picked up by a future sidecar release.
+              </p>
             </div>
           </section>
 

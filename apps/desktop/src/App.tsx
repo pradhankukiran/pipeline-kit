@@ -446,6 +446,14 @@ export function App() {
     setSettings((current) => ({ ...current, autoConnect: value }));
   }, []);
 
+  const setAutoCheckpoint = useCallback((value: boolean) => {
+    setSettings((current) => ({ ...current, blenderAutoCheckpoint: value }));
+  }, []);
+
+  const setApprovalTimeoutSec = useCallback((value: number) => {
+    setSettings((current) => ({ ...current, approvalTimeoutSec: value }));
+  }, []);
+
   const handleSaveSettings = useCallback(async () => {
     setActions((current) => ({ ...current, saveSettings: true }));
     setError(null);
@@ -667,7 +675,11 @@ export function App() {
         saving={actions.saveSettings}
         disabled={loading}
         autoConnect={settings.autoConnect}
+        autoCheckpoint={settings.blenderAutoCheckpoint}
+        approvalTimeoutSec={settings.approvalTimeoutSec}
         onAutoConnectChange={setAutoConnect}
+        onAutoCheckpointChange={setAutoCheckpoint}
+        onApprovalTimeoutChange={setApprovalTimeoutSec}
         onChange={updateSetting}
         onSave={handleSaveSettings}
       />

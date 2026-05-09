@@ -170,6 +170,18 @@ function normalizeSettings(value: unknown): Partial<PipelineSettings> {
       : typeof blender.autoConnect === "boolean"
         ? blender.autoConnect
         : undefined,
+    blenderAutoCheckpoint:
+      typeof settings.blenderAutoCheckpoint === "boolean"
+        ? settings.blenderAutoCheckpoint
+        : typeof blender.autoCheckpoint === "boolean"
+          ? blender.autoCheckpoint
+          : undefined,
+    approvalTimeoutSec:
+      typeof settings.approvalTimeoutSec === "number"
+        ? settings.approvalTimeoutSec
+        : typeof settings.approvalTimeoutMs === "number"
+          ? Math.round(settings.approvalTimeoutMs / 1000)
+          : undefined,
     groqModel: typeof settings.groqModel === "string"
       ? settings.groqModel
       : typeof models.groqModel === "string"
@@ -406,8 +418,10 @@ function toSidecarSettings(settings: PipelineSettings): Record<string, unknown> 
     blender: {
       command: settings.blenderMcpCommand,
       args: settings.blenderMcpArgs.split(/\s+/).map((part) => part.trim()).filter(Boolean),
-      autoConnect: settings.autoConnect
+      autoConnect: settings.autoConnect,
+      autoCheckpoint: settings.blenderAutoCheckpoint
     },
+    approvalTimeoutSec: settings.approvalTimeoutSec,
     groq: {
       apiKey: settings.groqApiKey
     },

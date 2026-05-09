@@ -51,6 +51,8 @@ export type PipelineSettings = {
   blenderMcpCommand: string;
   blenderMcpArgs: string;
   autoConnect: boolean;
+  blenderAutoCheckpoint: boolean;
+  approvalTimeoutSec: number;
   groqModel: string;
   groqApiKey: string;
   openRouterModel: string;
@@ -82,6 +84,8 @@ export const fallbackSettings: PipelineSettings = {
   blenderMcpCommand: "blender-socket",
   blenderMcpArgs: "",
   autoConnect: false,
+  blenderAutoCheckpoint: true,
+  approvalTimeoutSec: 0,
   groqModel: "llama-3.3-70b-versatile",
   groqApiKey: "",
   openRouterModel: "anthropic/claude-3.5-sonnet",
