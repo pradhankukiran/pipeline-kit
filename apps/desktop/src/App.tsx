@@ -283,6 +283,9 @@ export function App() {
   // Global SSE: any step.started carrying requiresApproval triggers an
   // approvals refresh tick. Errors silently drop the subscription —
   // ReviewPanel keeps its own refresh button + tab-switch refresh.
+  // pipeline.cancelled and step.progress are subscribed here as no-op
+  // pass-throughs at the global level; the per-run subscription in
+  // PipelineRunsPanel does the heavy lifting for live updates.
   useEffect(() => {
     const sub = subscribeAll({
       onStepStarted: (event) => {
@@ -290,6 +293,13 @@ export function App() {
         if (meta && (meta as Record<string, unknown>)["requiresApproval"] === true) {
           setApprovalsRefreshTick((current) => current + 1);
         }
+      },
+      onCancelled: () => {
+        // No-op at the global level — PipelineRunsPanel re-fetches per-run.
+      },
+      onStepProgress: () => {
+        // No-op at the global level — PipelineRunsPanel handles per-step
+        // progress via its dedicated per-run subscription.
       },
       onError: () => {
         sub.close();

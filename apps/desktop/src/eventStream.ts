@@ -7,13 +7,17 @@ export type PipelineSseEvent =
   | { type: "pipeline.started"; pipelineId: string }
   | { type: "step.started"; pipelineId: string; step: { id: string; lane: string; metadata?: Record<string, unknown> } & Record<string, unknown> }
   | { type: "step.completed"; pipelineId: string; result: { stepId: string; lane: string; status: string; output?: unknown; error?: string } & Record<string, unknown> }
-  | { type: "pipeline.completed"; pipelineId: string; results: ReadonlyArray<Record<string, unknown>> };
+  | { type: "pipeline.completed"; pipelineId: string; results: ReadonlyArray<Record<string, unknown>> }
+  | { type: "pipeline.cancelled"; pipelineId: string; cancelledAt?: string }
+  | { type: "step.progress"; pipelineId: string; stepId: string; message?: string; percent?: number; data?: unknown; emittedAt?: string };
 
 export type SseHandlers = {
   onStarted?: (event: Extract<PipelineSseEvent, { type: "pipeline.started" }>) => void;
   onStepStarted?: (event: Extract<PipelineSseEvent, { type: "step.started" }>) => void;
   onStepCompleted?: (event: Extract<PipelineSseEvent, { type: "step.completed" }>) => void;
   onCompleted?: (event: Extract<PipelineSseEvent, { type: "pipeline.completed" }>) => void;
+  onCancelled?: (event: Extract<PipelineSseEvent, { type: "pipeline.cancelled" }>) => void;
+  onStepProgress?: (event: Extract<PipelineSseEvent, { type: "step.progress" }>) => void;
   onError?: (err: unknown) => void;
 };
 
@@ -39,6 +43,12 @@ function dispatch(event: PipelineSseEvent, handlers: SseHandlers): void {
       return;
     case "pipeline.completed":
       handlers.onCompleted?.(event);
+      return;
+    case "pipeline.cancelled":
+      handlers.onCancelled?.(event);
+      return;
+    case "step.progress":
+      handlers.onStepProgress?.(event);
       return;
   }
 }
