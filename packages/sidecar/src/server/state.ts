@@ -28,6 +28,15 @@ export interface BlenderMcpSettings {
   readonly command: string;
   readonly args: readonly string[];
   readonly autoConnect: boolean;
+  /**
+   * When true (the default when absent), every successful mutating Blender
+   * step in a pipeline run is followed by an auto-dispatched
+   * `save_checkpoint` op. Read-only ops (`inspect_scene`) and explicit
+   * `save_checkpoint` ops are skipped. Disable by setting `false` from the
+   * settings UI. Optional/absent → treated as `true` for backwards
+   * compatibility with legacy state files.
+   */
+  readonly autoCheckpoint?: boolean;
 }
 
 export interface SidecarSettings {
@@ -174,7 +183,11 @@ export function updateSettings(current: SidecarSettings, patch: unknown): Sideca
     blender: {
       command: nextCommand,
       args: readStringArray(blender["args"], current.blender.args),
-      autoConnect: readBoolean(blender["autoConnect"], current.blender.autoConnect)
+      autoConnect: readBoolean(blender["autoConnect"], current.blender.autoConnect),
+      autoCheckpoint: readBoolean(
+        blender["autoCheckpoint"],
+        current.blender.autoCheckpoint ?? true
+      )
     }
   };
 }
@@ -431,18 +444,23 @@ function mergeBlenderSettings(
   const args = readStringArray(persisted.args, base.args);
   const autoConnect =
     typeof persisted.autoConnect === "boolean" ? persisted.autoConnect : base.autoConnect;
+  // Absent → default to true so existing state files keep auto-checkpointing.
+  const autoCheckpoint =
+    typeof persisted.autoCheckpoint === "boolean" ? persisted.autoCheckpoint : true;
 
   if (shouldMigrateLegacyBlenderMcpSettings(command, args)) {
     return {
       ...base,
-      autoConnect
+      autoConnect,
+      autoCheckpoint
     };
   }
 
   return {
     command,
     args,
-    autoConnect
+    autoConnect,
+    autoCheckpoint
   };
 }
 
@@ -642,7 +660,8 @@ function createDefaultSettings(): SidecarSettings {
     blender: {
       command: process.env["PIPELINEKIT_BLENDER_MCP_COMMAND"] ?? "blender-socket",
       args: readEnvArgs(process.env["PIPELINEKIT_BLENDER_MCP_ARGS"]) ?? [],
-      autoConnect: process.env["PIPELINEKIT_BLENDER_MCP_AUTOCONNECT"] === "1"
+      autoConnect: process.env["PIPELINEKIT_BLENDER_MCP_AUTOCONNECT"] === "1",
+      autoCheckpoint: process.env["PIPELINEKIT_BLENDER_AUTOCHECKPOINT"] === "0" ? false : true
     }
   };
 }

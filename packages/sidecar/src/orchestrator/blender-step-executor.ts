@@ -1,4 +1,8 @@
-import type { BlenderOperation, OperationResult } from "@pipelinekit/core";
+import type {
+  BlenderOperation,
+  OperationResult,
+  SaveCheckpointOperation
+} from "@pipelinekit/core";
 import { validateBlenderOperation } from "@pipelinekit/core";
 import type { BlenderMcpClient } from "../blender/mcp-client.js";
 import type { ModelProvider, PipelineStepContext, PipelineStepExecutor } from "../providers/types.js";
@@ -136,12 +140,18 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
       );
     };
 
+    const runOpAndMaybeCheckpoint = async (): Promise<unknown> => {
+      const output = await runOp();
+      await this.maybeAutoCheckpoint(context, validatedOperation, metadata);
+      return output;
+    };
+
     const metadataRequiresApproval = metadata["requiresApproval"] === true;
     const operationRequiresApproval = validatedOperation?.requiresApproval === true;
     const requiresApproval = metadataRequiresApproval || operationRequiresApproval;
 
     if (!requiresApproval || !this.gate) {
-      return runOp();
+      return runOpAndMaybeCheckpoint();
     }
 
     const projectId = resolveProjectId(metadata, this.state);
@@ -149,7 +159,7 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
       process.stderr.write(
         `[pipelinekit-sidecar] approval-gated step "${context.step.id}" has no projectId (step.metadata.projectId or state.activeProjectId); skipping gate.\n`
       );
-      return runOp();
+      return runOpAndMaybeCheckpoint();
     }
 
     const decision = await this.gate({
@@ -169,7 +179,84 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
       throw new Error(`Step rejected: ${decision.reason ?? "no reason"}`);
     }
 
-    return runOp();
+    return runOpAndMaybeCheckpoint();
+  }
+
+  /**
+   * Dispatches an auto-`save_checkpoint` op after a successful mutating
+   * Blender step. Skipped silently when:
+   *   - no `operationRunner` is configured (we have nothing to dispatch with);
+   *   - the original step's op was `inspect_scene` or `save_checkpoint`
+   *     (read-only or already a checkpoint);
+   *   - `state.settings.blender.autoCheckpoint` is `false` (defaults to `true`
+   *     when absent so legacy state files keep checkpointing);
+   *   - no `projectId` can be resolved (typed-op path uses the original op's
+   *     projectId; python/python-translated paths fall back to step metadata
+   *     or `state.activeProjectId`).
+   *
+   * On failure, logs to stderr and returns — the original step result is
+   * preserved. This keeps `save_checkpoint` strictly opportunistic so a
+   * disk-full / permission failure never aborts an otherwise-successful run.
+   */
+  private async maybeAutoCheckpoint(
+    context: PipelineStepContext,
+    originalOperation: BlenderOperation | undefined,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    if (!this.operationRunner) {
+      return;
+    }
+    if (originalOperation) {
+      if (
+        originalOperation.type === "inspect_scene" ||
+        originalOperation.type === "save_checkpoint"
+      ) {
+        return;
+      }
+    }
+    if (this.state?.settings.blender.autoCheckpoint === false) {
+      return;
+    }
+
+    const projectId =
+      originalOperation?.projectId ?? resolveProjectId(metadata, this.state);
+    if (!projectId) {
+      process.stderr.write(
+        `[pipelinekit-sidecar] auto-checkpoint skipped for step ${context.step.id}: no projectId resolvable\n`
+      );
+      return;
+    }
+
+    const checkpointId = originalOperation
+      ? `auto-${originalOperation.id}`
+      : `auto-${context.step.id}-${Date.now()}`;
+
+    const checkpoint: SaveCheckpointOperation = {
+      id: checkpointId,
+      projectId,
+      type: "save_checkpoint",
+      params: {
+        label: `auto_${context.step.id}`,
+        includeBlendFile: true
+      },
+      risk: "low",
+      requiresApproval: false,
+      createdAt: new Date().toISOString()
+    };
+
+    try {
+      const result = await this.operationRunner.runOperation(checkpoint);
+      if (result.status !== "succeeded") {
+        process.stderr.write(
+          `[pipelinekit-sidecar] auto-checkpoint failed for step ${context.step.id}: ${result.error ?? result.summary}\n`
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `[pipelinekit-sidecar] auto-checkpoint failed for step ${context.step.id}: ${message}\n`
+      );
+    }
   }
 
   /**
