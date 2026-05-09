@@ -19,3 +19,9 @@ tauri-plugin-shell = "2"
 tauri-plugin-window-state = "2"
 dirs = "6"
 dunce = "1"
+
+# Native window effects: macOS vibrancy + Windows 11 Mica.
+# The crate compiles on every desktop OS and returns
+# `Error::UnsupportedPlatform` when the requested effect is unavailable,
+# so we don't need cfg-gated dependency stanzas.
+window-vibrancy = "0.6"

@@ -159,6 +159,42 @@ fn kill_sidecar(app: &AppHandle) {
     }
 }
 
+/// Applies platform-native window effects to the main window.
+///
+/// macOS gets `NSVisualEffectMaterial::Sidebar` so the title-bar Overlay
+/// area picks up a frosted-glass look. Failures are non-fatal — if the
+/// underlying API call fails we just log and continue with the default
+/// chrome.
+#[allow(unused_variables)]
+fn apply_window_effects(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+        if let Err(err) = apply_vibrancy(
+            &window,
+            NSVisualEffectMaterial::Sidebar,
+            Some(NSVisualEffectState::Active),
+            None,
+        ) {
+            eprintln!("[pipelinekit] failed to apply macOS vibrancy: {err:?}");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // false = light mode. Mica is Windows 11+ only; on older
+        // Windows versions this returns UnsupportedPlatform and we
+        // fall back to the default solid title bar.
+        if let Err(err) = window_vibrancy::apply_mica(&window, Some(false)) {
+            eprintln!("[pipelinekit] failed to apply Windows Mica blur: {err:?}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -183,6 +219,7 @@ pub fn run() {
             if let Err(err) = menu::build_and_install(&app.handle()) {
                 eprintln!("[pipelinekit] failed to install application menu: {err}");
             }
+            apply_window_effects(&app.handle());
             if let Err(err) = spawn_sidecar(&app.handle()) {
                 eprintln!("[pipelinekit] sidecar spawn failed: {err}");
                 let log_path = log_dir().join("sidecar.log");

@@ -39,6 +39,10 @@
     ],
     "resources": [
       "resources/pipelinekit-sidecar.cjs"
-    ]
+    ],
+    "category": "public.app-category.graphics-design",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
   }
 }
