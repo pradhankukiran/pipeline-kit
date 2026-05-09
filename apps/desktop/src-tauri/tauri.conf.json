@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PipelineKit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "dev.pipelinekit.desktop",
   "build": {
     "beforeDevCommand": "corepack pnpm --filter @pipelinekit/core --filter @pipelinekit/recipes --filter @pipelinekit/assets -r build && corepack pnpm --filter @pipelinekit/sidecar run bundle && corepack pnpm vite --host 127.0.0.1",
@@ -48,7 +48,9 @@
     "category": "public.app-category.graphics-design",
     "fileAssociations": [
       {
-        "ext": ["json"],
+        "ext": [
+          "json"
+        ],
         "name": "PipelineKitProject",
         "description": "PipelineKit project bundle",
         "mimeType": "application/json",
@@ -67,7 +69,9 @@
     "linux": {
       "deb": {
         "section": "graphics",
-        "depends": ["nodejs"],
+        "depends": [
+          "nodejs"
+        ],
         "desktopTemplate": "desktop-template.desktop"
       },
       "appimage": {
@@ -82,14 +86,23 @@
       "endpoints": [
         "https://github.com/pradhankukiran/pipeline-kit/releases/latest/download/latest.json"
       ],
-      "windows": { "installMode": "passive" }
+      "windows": {
+        "installMode": "passive"
+      }
     },
     "deep-link": {
       "mobile": [
-        { "host": "pipelinekit.dev", "pathPrefix": ["/"] }
+        {
+          "host": "pipelinekit.dev",
+          "pathPrefix": [
+            "/"
+          ]
+        }
       ],
       "desktop": {
-        "schemes": ["pipelinekit"]
+        "schemes": [
+          "pipelinekit"
+        ]
       }
     }
   }

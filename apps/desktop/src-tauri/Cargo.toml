@@ -1,6 +1,6 @@
 [package]
 name = "pipelinekit-desktop"
-version = "0.2.0"
+version = "0.3.0"
 description = "PipelineKit desktop shell"
 authors = ["PipelineKit"]
 edition = "2021"
