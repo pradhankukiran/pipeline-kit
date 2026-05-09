@@ -23,6 +23,13 @@ export type AssetImportInput =
         readonly ao?: string;
       };
       readonly targetObjectName?: string;
+    }
+  | {
+      readonly kind: "model";
+      readonly slug: string;
+      readonly localPath: string;
+      readonly format: "gltf" | "glb" | "fbx" | "blend";
+      readonly targetCollection?: string;
     };
 
 export function buildAssetImportPython(input: AssetImportInput): string {
@@ -31,6 +38,8 @@ export function buildAssetImportPython(input: AssetImportInput): string {
       return buildHdriScript(input);
     case "material":
       return buildMaterialScript(input);
+    case "model":
+      return buildModelScript(input);
   }
 }
 
@@ -232,7 +241,102 @@ print(json.dumps({
 `;
 }
 
-function pythonPrelude(kind: "hdri" | "material", payload: unknown): string {
+function buildModelScript(input: Extract<AssetImportInput, { kind: "model" }>): string {
+  const sanitizedSlug = sanitizeSlugForName(input.slug);
+  const collectionName = input.targetCollection ?? `PK_model_${sanitizedSlug}`;
+  const payload = {
+    slug: input.slug,
+    localPath: input.localPath,
+    format: input.format,
+    collectionName
+  };
+
+  return `${pythonPrelude("model", payload)}
+slug = payload["slug"]
+local_path = payload["localPath"]
+fmt = payload["format"]
+collection_name = payload["collectionName"]
+
+# Drop any existing collection with the same name so re-import is idempotent.
+existing = bpy.data.collections.get(collection_name)
+if existing is not None:
+    # Remove every object that lives in the collection, then unlink/remove the collection itself.
+    objects_to_remove = [obj for obj in existing.objects]
+    for obj in objects_to_remove:
+        try:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        except Exception:
+            pass
+    # Unlink the collection from any parent collections that reference it.
+    for parent in list(bpy.data.collections):
+        if collection_name in parent.children:
+            try:
+                parent.children.unlink(existing)
+            except Exception:
+                pass
+    scene_root = bpy.context.scene.collection
+    if existing.name in scene_root.children:
+        try:
+            scene_root.children.unlink(existing)
+        except Exception:
+            pass
+    try:
+        bpy.data.collections.remove(existing)
+    except Exception:
+        pass
+
+# Create a fresh target collection and link it to the current scene.
+target_collection = bpy.data.collections.new(collection_name)
+bpy.context.scene.collection.children.link(target_collection)
+
+# Snapshot existing objects before import so we can detect new ones.
+pre_import_objects = set(obj.name for obj in bpy.data.objects)
+
+if fmt in ("gltf", "glb"):
+    bpy.ops.import_scene.gltf(filepath=local_path)
+elif fmt == "fbx":
+    bpy.ops.import_scene.fbx(filepath=local_path)
+elif fmt == "blend":
+    # Append every object data block from the source .blend file.
+    with bpy.data.libraries.load(local_path, link=False) as (data_from, data_to):
+        data_to.objects = list(data_from.objects)
+    for obj in data_to.objects:
+        if obj is not None:
+            try:
+                bpy.context.scene.collection.objects.link(obj)
+            except Exception:
+                pass
+else:
+    raise ValueError("Unsupported model format: " + str(fmt))
+
+# Identify newly imported objects and move them into the target collection.
+post_import_objects = [obj for obj in bpy.data.objects if obj.name not in pre_import_objects]
+
+scene_root = bpy.context.scene.collection
+for obj in post_import_objects:
+    # Unlink from every collection that currently holds it (master + any auto-created ones).
+    for coll in list(obj.users_collection):
+        try:
+            coll.objects.unlink(obj)
+        except Exception:
+            pass
+    try:
+        target_collection.objects.link(obj)
+    except Exception:
+        pass
+
+print(json.dumps({
+    "operation": "import_asset",
+    "kind": "model",
+    "slug": slug,
+    "format": fmt,
+    "collection": target_collection.name,
+    "objectCount": len(post_import_objects)
+}))
+`;
+}
+
+function pythonPrelude(kind: "hdri" | "material" | "model", payload: unknown): string {
   return `import bpy
 import json
 
