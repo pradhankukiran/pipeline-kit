@@ -587,7 +587,9 @@ export async function searchAssets(body: {
   };
 }
 
-export type ImportPolyHavenAssetResponse = {
+export type AssetImportKind = "hdri" | "material" | "model";
+
+export type ImportAssetResponse = {
   ok: boolean;
   kind: string;
   slug: string;
@@ -596,16 +598,68 @@ export type ImportPolyHavenAssetResponse = {
   error?: string;
 };
 
-export async function importPolyHavenAsset(input: {
+export type ImportPolyHavenAssetInput = {
+  source: "polyhaven";
   id: string;
-  kind: "hdri" | "material";
+  kind: AssetImportKind;
   resolution?: "1k" | "2k" | "4k";
-}): Promise<ImportPolyHavenAssetResponse> {
+};
+
+export type ImportLocalAssetInput = {
+  source: "local";
+  path: string;
+  kind: AssetImportKind;
+  /** Optional name of the object to receive the imported material. */
+  targetObjectName?: string;
+  /** Optional explicit material/texture map override. */
+  materialTextures?: Record<string, string>;
+};
+
+export type ImportAssetInput =
+  | ImportPolyHavenAssetInput
+  | ImportLocalAssetInput;
+
+const ASSET_IMPORT_TIMEOUT_MS = 60_000;
+
+export async function importAsset(
+  input: ImportAssetInput
+): Promise<ImportAssetResponse> {
   const endpoint = `${sidecarBaseUrl}/blender/import-asset`;
   const controller = new AbortController();
   // Asset downloads + Blender Python execution can comfortably exceed the
   // 2.5s default timeout used elsewhere; allow up to 60s.
-  const timeout = window.setTimeout(() => controller.abort(), 60_000);
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    ASSET_IMPORT_TIMEOUT_MS
+  );
+
+  // Synthesise a stable identifier for the local case (the local API uses
+  // the path as the slug for display; the sidecar still gets the full path).
+  const fallbackSlug =
+    input.source === "polyhaven" ? input.id : input.path;
+
+  // The Poly Haven path expects a default resolution for HDRI/material; for
+  // models the resolution is irrelevant, but we still send "2k" as a no-op
+  // value to keep the request shape consistent across kinds.
+  const body: Record<string, unknown> =
+    input.source === "polyhaven"
+      ? {
+          source: "polyhaven",
+          id: input.id,
+          kind: input.kind,
+          resolution: input.resolution ?? "2k"
+        }
+      : {
+          source: "local",
+          path: input.path,
+          kind: input.kind,
+          ...(input.targetObjectName
+            ? { targetObjectName: input.targetObjectName }
+            : {}),
+          ...(input.materialTextures
+            ? { materialTextures: input.materialTextures }
+            : {})
+        };
 
   try {
     const response = await fetch(endpoint, {
@@ -614,12 +668,7 @@ export async function importPolyHavenAsset(input: {
         Accept: "application/json",
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        source: "polyhaven",
-        id: input.id,
-        kind: input.kind,
-        resolution: input.resolution ?? "2k"
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal
     });
 
@@ -635,8 +684,9 @@ export async function importPolyHavenAsset(input: {
       return {
         ok: false,
         kind: typeof data.kind === "string" ? data.kind : input.kind,
-        slug: typeof data.slug === "string" ? data.slug : input.id,
-        localPath: typeof data.localPath === "string" ? data.localPath : undefined,
+        slug: typeof data.slug === "string" ? data.slug : fallbackSlug,
+        localPath:
+          typeof data.localPath === "string" ? data.localPath : undefined,
         message: typeof data.message === "string" ? data.message : undefined,
         error:
           typeof data.error === "string"
@@ -648,8 +698,9 @@ export async function importPolyHavenAsset(input: {
     return {
       ok: true,
       kind: typeof data.kind === "string" ? data.kind : input.kind,
-      slug: typeof data.slug === "string" ? data.slug : input.id,
-      localPath: typeof data.localPath === "string" ? data.localPath : undefined,
+      slug: typeof data.slug === "string" ? data.slug : fallbackSlug,
+      localPath:
+        typeof data.localPath === "string" ? data.localPath : undefined,
       message: typeof data.message === "string" ? data.message : undefined
     };
   } catch (error) {
@@ -662,12 +713,29 @@ export async function importPolyHavenAsset(input: {
     return {
       ok: false,
       kind: input.kind,
-      slug: input.id,
+      slug: fallbackSlug,
       error: message
     };
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+/** @deprecated Prefer `importAsset` — kept for back-compat. */
+export type ImportPolyHavenAssetResponse = ImportAssetResponse;
+
+/** @deprecated Prefer `importAsset` — kept for back-compat. */
+export async function importPolyHavenAsset(input: {
+  id: string;
+  kind: "hdri" | "material";
+  resolution?: "1k" | "2k" | "4k";
+}): Promise<ImportPolyHavenAssetResponse> {
+  return importAsset({
+    source: "polyhaven",
+    id: input.id,
+    kind: input.kind,
+    resolution: input.resolution
+  });
 }
 
 export async function getRecentOperations(filter?: {
