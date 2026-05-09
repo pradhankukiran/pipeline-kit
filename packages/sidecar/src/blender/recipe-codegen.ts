@@ -831,6 +831,11 @@ bpy.context.scene.frame_set(1)
  * Apply a material recipe to a target object. Falls back to the active object
  * if the named target cannot be resolved. Resolves the correct material data-
  * block name from the materialId so each procedural recipe is honored.
+ *
+ * Slot policy (idempotent): if the target already has slots, look for an
+ * existing slot whose material matches `PK_<material>` (no-op), else fill the
+ * first empty/null slot, else APPEND a new slot. Never overwrites slot 0,
+ * which would silently nuke a target object's primary material.
  */
 export function emitApplyMaterial(params: ApplyMaterialParams): string {
   const target = params.target;
@@ -851,10 +856,26 @@ export function emitApplyMaterial(params: ApplyMaterialParams): string {
     `_pk_apply_mat = bpy.data.materials.get(${pyStr(materialName)})`,
     `if _pk_apply_mat is None:`,
     `    raise RuntimeError("apply_material: material ${materialName} was not created")`,
-    `if len(_pk_target.data.materials) == 0:`,
-    `    _pk_target.data.materials.append(_pk_apply_mat)`,
+    // Slot policy: append-or-fill, NEVER overwrite slot 0. Re-running with
+    // the same target+material is a no-op once the slot is in place.
+    `_pk_slots = _pk_target.data.materials`,
+    `if len(_pk_slots) == 0:`,
+    `    _pk_slots.append(_pk_apply_mat)`,
     `else:`,
-    `    _pk_target.data.materials[0] = _pk_apply_mat`,
+    `    _pk_existing_idx = -1`,
+    `    _pk_empty_idx = -1`,
+    `    for _pk_i, _pk_slot in enumerate(_pk_slots):`,
+    `        if _pk_slot is not None and _pk_slot.name == ${pyStr(materialName)}:`,
+    `            _pk_existing_idx = _pk_i`,
+    `            break`,
+    `        if _pk_slot is None and _pk_empty_idx < 0:`,
+    `            _pk_empty_idx = _pk_i`,
+    `    if _pk_existing_idx >= 0:`,
+    `        pass`,
+    `    elif _pk_empty_idx >= 0:`,
+    `        _pk_slots[_pk_empty_idx] = _pk_apply_mat`,
+    `    else:`,
+    `        _pk_slots.append(_pk_apply_mat)`,
   ].join("\n");
 }
 
