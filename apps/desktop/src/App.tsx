@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 
 import { SettingsPanel } from "@/components/panels/SettingsPanel";
+import { useDeepLinks } from "@/lib/deep-links";
 import { useMenuEvents } from "@/lib/menu-events";
 import { checkForUpdate, formatUpdateBanner, type UpdateInfo } from "@/lib/updater";
 import {
   DashboardContext,
+  useDashboard,
   type DashboardContextValue,
   type OpStateMap,
   type QuickOp
@@ -688,6 +690,7 @@ export function App() {
   return (
     <DashboardContext.Provider value={contextValue}>
       <MenuEventBridge />
+      <DeepLinkBridge />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<WelcomePage />} />
@@ -732,5 +735,18 @@ export function App() {
  */
 function MenuEventBridge() {
   useMenuEvents();
+  return null;
+}
+
+/**
+ * Mirror of {@link MenuEventBridge} for the `pipelinekit://` URL
+ * scheme. Lives inside DashboardContext.Provider so it can read the
+ * project list (needed to validate `project/<id>` links) and inside the
+ * Router so it can call `useNavigate()`.
+ */
+function DeepLinkBridge() {
+  const navigate = useNavigate();
+  const { projects, setSubmitBanner } = useDashboard();
+  useDeepLinks(navigate, setSubmitBanner, projects);
   return null;
 }
