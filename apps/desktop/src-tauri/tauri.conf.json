@@ -74,5 +74,15 @@
         "bundleMediaFramework": false
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJFRjYxNUE4OEYwRkZBRTAKUldUZytnK1BxQlgyTGpFSERadnpaRFIyZklqU1hHOFNia0VzVEVWeDNKcC94bzNad1NSa3RsSWcK",
+      "endpoints": [
+        "https://github.com/pradhankukiran/pipeline-kit/releases/latest/download/latest.json"
+      ],
+      "windows": { "installMode": "passive" }
+    }
   }
 }

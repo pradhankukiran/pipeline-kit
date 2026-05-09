@@ -19,6 +19,7 @@
       "identifier": "shell:allow-kill",
       "allow": [{ "name": "node" }]
     },
+    "updater:default",
     "window-state:default"
   ]
 }
