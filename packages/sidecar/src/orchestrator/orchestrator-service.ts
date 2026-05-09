@@ -13,11 +13,13 @@ import { createOpenRouterProvider } from "../providers/openrouter.js";
 import type { PipelineStepContext, PipelineStepExecutor } from "../providers/types.js";
 import { BlenderOperationAdapter } from "../server/blender-adapter.js";
 import {
+  recordOperationBatch,
   recordPipelineRun,
   updatePipelineRun,
   type JsonOperation,
   type PipelineRunRecord,
   type PipelineRunStatus,
+  type RecentOperation,
   type SidecarState
 } from "../server/state.js";
 import { createApprovalGate } from "./approval-gate.js";
@@ -271,8 +273,12 @@ export class OrchestratorService {
     results: readonly PipelineStepResult[],
     projectId: ID | null
   ): void {
-    for (const result of results) {
-      if (result.lane !== "blender" || result.status !== "succeeded") {
+    const entries: RecentOperation[] = [];
+    // Walk results back-to-front so that prepending the resulting batch
+    // preserves chronological insertion order (latest step ends up first).
+    for (let i = results.length - 1; i >= 0; i -= 1) {
+      const result = results[i];
+      if (!result || result.lane !== "blender" || result.status !== "succeeded") {
         continue;
       }
 
@@ -288,10 +294,10 @@ export class OrchestratorService {
         ...(projectId ? { projectId } : {})
       };
 
-      this.state.recentOperations = [
-        { operation, result: operationResult, projectId },
-        ...this.state.recentOperations
-      ].slice(0, 20);
+      entries.push({ operation, result: operationResult, projectId });
+    }
+    if (entries.length > 0) {
+      recordOperationBatch(this.state, entries);
     }
   }
 }
