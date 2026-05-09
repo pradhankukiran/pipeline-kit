@@ -723,10 +723,14 @@ export async function createSidecarDevServer(): Promise<SidecarDevServerHandle> 
         const body = await readJsonBody(request);
         const input = isRecord(body) ? body : {};
         const status = input["status"];
-        if (status !== "approved" && status !== "rejected") {
+        // 'cancelled' is normally auto-set by the approval gate when a run is
+        // aborted, but accept it here too so the API stays consistent for any
+        // future caller (e.g. an admin tool) that wants to mark an approval
+        // as cancelled without going through the gate.
+        if (status !== "approved" && status !== "rejected" && status !== "cancelled") {
           writeJson(response, 400, {
             ok: false,
-            error: "Expected status to be 'approved' or 'rejected'."
+            error: "Expected status to be 'approved', 'rejected', or 'cancelled'."
           });
           return;
         }
@@ -1331,7 +1335,10 @@ function importProjectBundle(state: SidecarState, body: unknown): ProjectImportR
     if (
       kind.length === 0 ||
       summary.length === 0 ||
-      (status !== "pending" && status !== "approved" && status !== "rejected")
+      (status !== "pending" &&
+        status !== "approved" &&
+        status !== "rejected" &&
+        status !== "cancelled")
     ) {
       continue;
     }
