@@ -151,14 +151,16 @@ export function createApprovalGate(state: SidecarState): ApprovalGate {
 
 /**
  * Mark an in-flight approval as cancelled-at-gate after the run-level abort
- * signal fires. We persist the cancellation as a `rejected` approval (the
- * existing storage shape only knows approved / rejected) with a distinctive
- * reason so the audit trail is clear, and we surface a `cancelled` decision
- * to the executor so the step error path stays separate from user rejection.
+ * signal fires. The persisted record now carries `status: "cancelled"`
+ * (instead of the legacy `rejected` placeholder) so the audit trail and the
+ * Review UI can tell run-cancelled approvals apart from user-rejected ones.
+ * The in-flight `ApprovalGateDecision.status` keeps its existing `cancelled`
+ * value — callers (e.g. `BlenderStepExecutor`) already discriminate on that
+ * to throw a cancellation-specific error rather than the rejected branch.
  */
 function cancelDueToAbort(state: SidecarState, approvalId: string): ApprovalGateDecision {
   const reason = "Run cancelled while awaiting approval";
-  decideApproval(state, approvalId, "rejected", {
+  decideApproval(state, approvalId, "cancelled", {
     reason,
     decidedBy: "system"
   });

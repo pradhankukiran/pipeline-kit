@@ -78,7 +78,18 @@ export type Project = {
   updatedAt: string;
 };
 
-export type ApprovalStatus = "pending" | "approved" | "rejected";
+/**
+ * Terminal states for an Approval record.
+ *
+ *   - "pending"   — awaiting a human (or system) decision.
+ *   - "approved"  — explicitly green-lit, usually by a user clicking Approve.
+ *   - "rejected"  — explicitly denied, usually by a user clicking Reject.
+ *   - "cancelled" — auto-set by the sidecar when the surrounding pipeline run
+ *                   is cancelled while the approval is still pending. Distinct
+ *                   from "rejected" because the user did not choose to deny;
+ *                   the run was simply aborted out from under the gate.
+ */
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "cancelled";
 
 export type Approval = {
   id: ID;

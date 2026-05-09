@@ -678,7 +678,10 @@ function sanitizeApprovals(items: readonly Approval[] | undefined): Approval[] {
       typeof item["projectId"] === "string" &&
       typeof item["kind"] === "string" &&
       typeof item["summary"] === "string" &&
-      (status === "pending" || status === "approved" || status === "rejected") &&
+      (status === "pending" ||
+        status === "approved" ||
+        status === "rejected" ||
+        status === "cancelled") &&
       typeof item["createdAt"] === "string"
     );
   });
