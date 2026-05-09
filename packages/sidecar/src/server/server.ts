@@ -448,6 +448,57 @@ export async function createSidecarDevServer(): Promise<SidecarDevServerHandle> 
         return;
       }
 
+      const pipelineRunRerunMatch = url.pathname.match(
+        /^\/pipeline\/runs\/([^/]+)\/rerun$/
+      );
+      if (pipelineRunRerunMatch && request.method === "POST") {
+        const runId = decodeURIComponent(pipelineRunRerunMatch[1]);
+        let body: unknown;
+        try {
+          body = await readJsonBody(request);
+        } catch (parseError) {
+          const message =
+            parseError instanceof Error ? parseError.message : String(parseError);
+          writeJson(response, 400, { ok: false, error: `Invalid JSON body: ${message}` });
+          return;
+        }
+        const input = isRecord(body) ? body : {};
+        const fromStepId = typeof input["from"] === "string" ? input["from"].trim() : "";
+        if (fromStepId.length === 0) {
+          writeJson(response, 400, {
+            ok: false,
+            error: "Expected `from` to be a non-empty step id."
+          });
+          return;
+        }
+        const original = state.pipelineRuns.find((entry) => entry.id === runId);
+        if (!original) {
+          writeJson(response, 404, { ok: false, error: "Pipeline run not found." });
+          return;
+        }
+        const promptCandidate =
+          typeof input["prompt"] === "string" ? input["prompt"] : undefined;
+        const rerun = orchestratorService.rerunPipelineFromStep(runId, fromStepId, {
+          ...(promptCandidate ? { prompt: promptCandidate } : {})
+        });
+        if (!rerun) {
+          writeJson(response, 400, {
+            ok: false,
+            error:
+              "Cannot rerun: original run is missing its definition, is still running, or a predecessor of the chosen step has no recorded output."
+          });
+          return;
+        }
+        const encodedRunId = encodeURIComponent(rerun.runId);
+        writeJson(response, 202, {
+          runId: rerun.runId,
+          status: "running",
+          runUrl: `/pipeline/runs/${encodedRunId}`,
+          eventsUrl: `/events?runId=${encodedRunId}`
+        });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/events") {
         const runIdFilter = url.searchParams.get("runId");
         const filter = createRunIdFilter(runIdFilter);
@@ -1256,7 +1307,8 @@ function importProjectBundle(state: SidecarState, body: unknown): ProjectImportR
       status === "running" ||
       status === "completed" ||
       status === "failed" ||
-      status === "rejected"
+      status === "rejected" ||
+      status === "cancelled"
         ? status
         : "completed";
 
@@ -1270,7 +1322,10 @@ function importProjectBundle(state: SidecarState, body: unknown): ProjectImportR
       ...(typeof entry["completedAt"] === "string"
         ? { completedAt: entry["completedAt"] as string }
         : {}),
-      results: entry["results"] as PipelineRunRecord["results"]
+      results: entry["results"] as PipelineRunRecord["results"],
+      ...(isRecord(entry["definition"])
+        ? { definition: entry["definition"] as PipelineRunRecord["definition"] }
+        : {})
     };
     recordPipelineRun(state, run);
     importedRuns += 1;

@@ -6,7 +6,7 @@ import type {
   PipelineOperation,
   Project
 } from "@pipelinekit/core";
-import type { PipelineStepResult } from "../contracts.js";
+import type { PipelineDefinition, PipelineStepResult } from "../contracts.js";
 import {
   archiveEvictedOperations,
   archiveEvictedRuns,
@@ -64,6 +64,13 @@ export interface PipelineRunRecord {
   readonly startedAt: string;
   readonly completedAt?: string;
   readonly results: readonly PipelineStepResult[];
+  /**
+   * Full `PipelineDefinition` captured when the run was submitted. Optional so
+   * legacy state files (written before this field existed) keep loading; new
+   * records always carry it. Required for `rerunPipelineFromStep` — runs
+   * without it cannot be replayed.
+   */
+  readonly definition?: PipelineDefinition;
 }
 
 export interface JsonOperation {
@@ -516,7 +523,10 @@ function sanitizePipelineRuns(
       status,
       startedAt: item["startedAt"],
       ...(completedAt !== undefined ? { completedAt } : {}),
-      results: item["results"] as readonly PipelineStepResult[]
+      results: item["results"] as readonly PipelineStepResult[],
+      ...(isRecord(item["definition"])
+        ? { definition: item["definition"] as PipelineDefinition }
+        : {})
     };
 
     result.push(sanitized);

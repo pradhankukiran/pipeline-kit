@@ -100,7 +100,8 @@ export class OrchestratorService {
       status: deriveRunStatus(results),
       startedAt,
       completedAt,
-      results
+      results,
+      definition: enrichedDefinition
     });
 
     return {
@@ -134,10 +135,129 @@ export class OrchestratorService {
       definitionId: runId,
       status: "running",
       startedAt,
-      results: []
+      results: [],
+      definition: enrichedDefinition
     };
     recordPipelineRun(this.state, initialRecord);
 
+    this.spawnAsyncRun(runId, enrichedDefinition, projectId);
+
+    return { runId };
+  }
+
+  /**
+   * Re-executes a finished run starting at `fromStepId`, pre-seeding outputs
+   * from the original run for every step in `fromStepId`'s transitive
+   * dependency closure. Steps outside the closure (and `fromStepId` itself)
+   * run normally with a fresh runId.
+   *
+   * Returns:
+   *   - `null` if the original run is missing, lacks a stored `definition`
+   *     (legacy record), is still running, has no step matching `fromStepId`,
+   *     or one of the seeded predecessors has no captured `output`. A stderr
+   *     warning explains the specific reason.
+   *   - `{ runId }` once the new run record is recorded and dispatched.
+   *
+   * Original-run state is not mutated. The new run's id is
+   * `<originalRunId>-rerun-<epochMs>` to keep the relationship visible while
+   * still being unique.
+   */
+  rerunPipelineFromStep(
+    originalRunId: ID,
+    fromStepId: ID,
+    opts?: { readonly prompt?: string }
+  ): { readonly runId: string } | null {
+    const original = this.state.pipelineRuns.find((run) => run.id === originalRunId);
+    if (!original) {
+      process.stderr.write(
+        `[pipelinekit-sidecar] rerun: original run ${originalRunId} not found\n`
+      );
+      return null;
+    }
+    if (!original.definition) {
+      process.stderr.write(
+        `[pipelinekit-sidecar] rerun: original run ${originalRunId} has no stored definition (legacy record)\n`
+      );
+      return null;
+    }
+    if (original.status === "running") {
+      process.stderr.write(
+        `[pipelinekit-sidecar] rerun: original run ${originalRunId} is still running; cancel it first\n`
+      );
+      return null;
+    }
+
+    const definition = original.definition;
+    const stepIds = new Set(definition.steps.map((step) => step.id));
+    if (!stepIds.has(fromStepId)) {
+      process.stderr.write(
+        `[pipelinekit-sidecar] rerun: step ${fromStepId} not present in original definition ${originalRunId}\n`
+      );
+      return null;
+    }
+
+    const closure = computeDependencyClosure(definition, fromStepId);
+    if (!closure) {
+      process.stderr.write(
+        `[pipelinekit-sidecar] rerun: dependency graph for ${originalRunId} has cycles; cannot rerun\n`
+      );
+      return null;
+    }
+
+    const seededOutputs = new Map<string, unknown>();
+    for (const seedId of closure) {
+      const result = original.results.find((entry) => entry.stepId === seedId);
+      if (!result || result.output === undefined) {
+        process.stderr.write(
+          `[pipelinekit-sidecar] rerun: step ${seedId} had no output to seed\n`
+        );
+        return null;
+      }
+      seededOutputs.set(seedId, result.output);
+    }
+
+    const newRunId = `${originalRunId}-rerun-${Date.now()}`;
+    const newDefinition: PipelineDefinition = {
+      ...definition,
+      id: newRunId
+    };
+    const projectId = original.projectId;
+    const promptCandidate =
+      typeof opts?.prompt === "string" && opts.prompt.length > 0
+        ? opts.prompt
+        : original.prompt;
+
+    const startedAt = new Date().toISOString();
+    const initialRecord: PipelineRunRecord = {
+      id: newRunId,
+      projectId,
+      ...(typeof promptCandidate === "string" ? { prompt: promptCandidate } : {}),
+      definitionId: newRunId,
+      status: "running",
+      startedAt,
+      results: [],
+      definition: newDefinition
+    };
+    recordPipelineRun(this.state, initialRecord);
+
+    this.spawnAsyncRun(newRunId, newDefinition, projectId, seededOutputs);
+
+    return { runId: newRunId };
+  }
+
+  /**
+   * Shared kickoff for `runPipelineAsync` and `rerunPipelineFromStep`. Builds
+   * executors, registers an AbortController, dispatches the orchestrator, and
+   * patches the run record on completion / failure / cancellation. Callers
+   * are responsible for inserting the initial `running` record before this
+   * runs.
+   */
+  private spawnAsyncRun(
+    runId: string,
+    enrichedDefinition: PipelineDefinition,
+    projectId: ID | null,
+    seededOutputs?: ReadonlyMap<string, unknown>
+  ): void {
     const lanes = collectLanes(enrichedDefinition);
     const executors = this.buildExecutors(lanes);
     const orchestrator = new PipelineOrchestrator({
@@ -148,8 +268,15 @@ export class OrchestratorService {
     const controller = new AbortController();
     this.runControllers.set(runId, controller);
 
+    const runOptions: { signal: AbortSignal; seededOutputs?: ReadonlyMap<string, unknown> } = {
+      signal: controller.signal
+    };
+    if (seededOutputs && seededOutputs.size > 0) {
+      runOptions.seededOutputs = seededOutputs;
+    }
+
     void orchestrator
-      .run(enrichedDefinition, { signal: controller.signal })
+      .run(enrichedDefinition, runOptions)
       .then((results) => {
         this.recordBlenderResults(results, projectId);
         // If `cancelRun` already wrote a `cancelled` status for this run we
@@ -187,8 +314,6 @@ export class OrchestratorService {
       .finally(() => {
         this.runControllers.delete(runId);
       });
-
-    return { runId };
   }
 
   /**
@@ -459,6 +584,56 @@ function deriveRunStatus(
     return "failed";
   }
   return "completed";
+}
+
+/**
+ * Returns every step ID that is a transitive dependency of `targetStepId`
+ * (i.e. its strict ancestor set in the DAG). Returns `null` if a cycle is
+ * detected — those graphs cannot be safely replayed.
+ *
+ * The traversal is BFS via the `dependsOn` reverse edges; we only walk
+ * declared deps that exist in the definition, so dangling references are
+ * silently ignored (consistent with how the orchestrator's
+ * `dependenciesSatisfied` check handles them — unknown deps would never
+ * resolve, so a downstream rerun won't be worse off).
+ */
+function computeDependencyClosure(
+  definition: PipelineDefinition,
+  targetStepId: string
+): Set<string> | null {
+  const stepsById = new Map(definition.steps.map((step) => [step.id, step]));
+  const closure = new Set<string>();
+  const stack: string[] = [targetStepId];
+  const onStack = new Set<string>([targetStepId]);
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined) {
+      break;
+    }
+    onStack.delete(current);
+    const step = stepsById.get(current);
+    if (!step) {
+      continue;
+    }
+    const deps = step.dependsOn ?? [];
+    for (const dep of deps) {
+      if (dep === targetStepId) {
+        // Self-cycle through `targetStepId` — not safe to rerun.
+        return null;
+      }
+      if (closure.has(dep)) {
+        continue;
+      }
+      closure.add(dep);
+      if (!onStack.has(dep)) {
+        stack.push(dep);
+        onStack.add(dep);
+      }
+    }
+  }
+
+  return closure;
 }
 
 function readApiKey(state: SidecarState, provider: "groq" | "openrouter"): string | undefined {
