@@ -30,10 +30,21 @@ export function AppShell({
 
   return (
     <div className="flex min-h-screen min-w-[980px] flex-col bg-background text-foreground">
-      <header className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center gap-4 border-b border-border bg-white px-6">
+      {/*
+        The topbar acts as the macOS unified title-bar: dragging it moves
+        the window. Tauri honours `data-tauri-drag-region` on the header
+        and its descendants unless they opt out via "false". We leave the
+        outer container as the drag region; the project picker and the
+        action buttons explicitly opt out so clicks reach them.
+      */}
+      <header
+        data-tauri-drag-region
+        className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center gap-4 border-b border-border bg-white px-6"
+      >
         <Link
           to="/"
           aria-label="PipelineKit home"
+          data-tauri-drag-region="false"
           className="text-2xl font-bold tracking-tighter leading-none text-foreground transition-colors hover:text-foreground/70"
         >
           PipelineKit
@@ -41,15 +52,22 @@ export function AppShell({
         {hasProjectPicker ? (
           <>
             <Separator orientation="vertical" className="h-6" />
-            <div className="min-w-0 flex-1">{projectPicker}</div>
+            <div data-tauri-drag-region="false" className="min-w-0 flex-1">
+              {projectPicker}
+            </div>
           </>
         ) : (
-          <div className="min-w-0 flex-1" />
+          <div data-tauri-drag-region className="min-w-0 flex-1" />
         )}
         {hasMetrics ? (
-          <div className="hidden items-center gap-2 lg:flex">{topbarMetrics}</div>
+          <div
+            data-tauri-drag-region="false"
+            className="hidden items-center gap-2 lg:flex"
+          >
+            {topbarMetrics}
+          </div>
         ) : null}
-        <div className="flex items-center gap-2">
+        <div data-tauri-drag-region="false" className="flex items-center gap-2">
           {apiStatus}
           {topbarActions}
         </div>
