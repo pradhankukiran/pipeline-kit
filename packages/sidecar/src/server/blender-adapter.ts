@@ -192,6 +192,35 @@ export class BlenderOperationAdapter {
     }
   }
 
+  /**
+   * Best-effort abort of any in-flight Blender MCP call. Tears down the
+   * memoized client (if any) — its pending socket / SDK promises reject with
+   * `AbortError`s whose message starts with `Blender call aborted`. The next
+   * `runOperation`/`runPython`/`connect` call lazily reopens a fresh client.
+   *
+   * No-op when there's no live client. Errors during teardown are swallowed
+   * so the caller can keep running its cancellation logic.
+   */
+  abort(reason?: string): void {
+    const client = this.client;
+    if (!client) {
+      return;
+    }
+    try {
+      client.abort(reason);
+    } catch (error) {
+      const message = errorMessage(error);
+      process.stderr.write(`[pipelinekit-sidecar] Blender abort threw: ${message}\n`);
+    }
+    this.state.blender = {
+      connected: false,
+      mode: "fallback",
+      ...(this.state.blender.lastError ? { lastError: this.state.blender.lastError } : {})
+    };
+    this.client = undefined;
+    this.clientKey = undefined;
+  }
+
   private getClient(): BlenderMcpClient {
     const key = settingsKey(this.state.settings);
     if (!this.client || this.clientKey !== key) {

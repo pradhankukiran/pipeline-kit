@@ -505,6 +505,13 @@ export class OrchestratorService {
         },
         async close() {
           /* adapter owns the underlying client lifecycle */
+        },
+        abort(reason?: string) {
+          // Delegate to the adapter so the underlying memoized client tears
+          // down its socket / SDK transport. This is what makes the
+          // python-fallback path (which goes through `adapter.runPython`)
+          // responsive to run cancellation.
+          adapter.abort(reason);
         }
       };
       executors.push(

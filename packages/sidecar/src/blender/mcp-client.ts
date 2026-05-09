@@ -29,6 +29,21 @@ export interface BlenderMcpClient {
   listTools(): Promise<unknown>;
   call(command: BlenderMcpCommand): Promise<BlenderMcpResult>;
   close(): Promise<void>;
+  /**
+   * Best-effort abort of any in-flight `connect`/`listTools`/`call`. Tears
+   * down the underlying socket / SDK client and rejects pending promises with
+   * an error whose message starts with `"Blender call aborted"`. Subsequent
+   * calls reopen the transport fresh. The optional `reason` is included in
+   * the rejection message so callers can distinguish "run cancelled" from
+   * other tear-down causes.
+   *
+   * SAFETY: this only affects the sidecar-side socket / SDK call. It does
+   * NOT interrupt the bpy script that's still running inside Blender — the
+   * Blender process keeps executing whatever Python it was given until that
+   * Python finishes naturally. Aborting here just makes the orchestrator stop
+   * waiting for the result so the user can move on.
+   */
+  abort(reason?: string): void;
 }
 
 export interface BlenderMcpClientOptions {
@@ -78,6 +93,14 @@ export class SdkBlenderMcpClient implements BlenderMcpClient {
   private readonly options: BlenderMcpClientOptions;
   private client?: McpClient;
   private transport?: McpTransport;
+  /**
+   * Tracks promise rejecters for in-flight `listTools`/`call` invocations.
+   * `abort()` walks this set and rejects each one with a `Blender call
+   * aborted` error so the calling orchestrator unblocks immediately. The
+   * underlying SDK call may keep running until it sees the closed transport
+   * — the rejection here is sidecar-side only.
+   */
+  private readonly pendingRejecters = new Set<(error: Error) => void>();
 
   constructor(options: BlenderMcpClientOptions) {
     this.options = options;
@@ -97,22 +120,24 @@ export class SdkBlenderMcpClient implements BlenderMcpClient {
       args: this.options.args ? [...this.options.args] : undefined
     }) as unknown as McpTransport;
 
-    await client.connect(transport);
+    await this.trackPending(client.connect(transport));
     this.client = client;
     this.transport = transport;
   }
 
   async listTools(): Promise<unknown> {
     await this.connect();
-    return this.getClient().listTools();
+    return this.trackPending(this.getClient().listTools());
   }
 
   async call(command: BlenderMcpCommand): Promise<BlenderMcpResult> {
     await this.connect();
-    const output = await this.getClient().callTool({
-      name: command.name,
-      arguments: command.arguments
-    });
+    const output = await this.trackPending(
+      this.getClient().callTool({
+        name: command.name,
+        arguments: command.arguments
+      })
+    );
 
     return {
       command: command.name,
@@ -128,6 +153,55 @@ export class SdkBlenderMcpClient implements BlenderMcpClient {
 
     await client?.close?.();
     await transport?.close?.();
+  }
+
+  abort(reason?: string): void {
+    const message = `Blender call aborted${reason ? `: ${reason}` : ""}`;
+    const error = new Error(message);
+    error.name = "AbortError";
+
+    // Snapshot before iteration so reject handlers can mutate the set
+    // safely (they always remove their own entry in the `finally` clause
+    // tied to `trackPending`).
+    const rejecters = [...this.pendingRejecters];
+    this.pendingRejecters.clear();
+    for (const reject of rejecters) {
+      try {
+        reject(error);
+      } catch {
+        // Reject handlers are framework-managed and shouldn't throw, but
+        // swallow if they do — tearing down the transport is more important
+        // than a clean rejection log.
+      }
+    }
+
+    // Drop the live transport so subsequent calls reopen fresh.
+    void this.client?.close?.();
+    void this.transport?.close?.();
+    this.client = undefined;
+    this.transport = undefined;
+  }
+
+  /**
+   * Wraps a promise so a future `abort()` call can reject it with an
+   * `AbortError`. Whichever resolves first wins; the inner promise still
+   * runs to completion in the background. Adds the local rejecter to
+   * `pendingRejecters` for the lifetime of the wrapper.
+   */
+  private trackPending<T>(promise: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.pendingRejecters.add(reject);
+      promise.then(
+        (value) => {
+          this.pendingRejecters.delete(reject);
+          resolve(value);
+        },
+        (error: unknown) => {
+          this.pendingRejecters.delete(reject);
+          reject(error);
+        }
+      );
+    });
   }
 
   private getClient(): McpClient {
@@ -159,9 +233,21 @@ interface DirectBlenderSocketClientOptions {
   readonly timeoutMs: number;
 }
 
+interface PendingDirectCall {
+  readonly socket: Socket;
+  readonly reject: (error: Error) => void;
+}
+
 class DirectBlenderSocketClient implements BlenderMcpClient {
   private readonly options: DirectBlenderSocketClientOptions;
   private connected = false;
+  /**
+   * Live in-flight `execute` invocations. Each entry pairs the underlying
+   * `Socket` (so `abort()` can destroy it) with the promise rejecter (so
+   * `abort()` can reject the wrapper). Entries are added at the top of
+   * `execute` and removed inside the shared `finish` helper.
+   */
+  private readonly pending = new Set<PendingDirectCall>();
 
   constructor(options: DirectBlenderSocketClientOptions) {
     this.options = options;
@@ -203,6 +289,34 @@ class DirectBlenderSocketClient implements BlenderMcpClient {
     this.connected = false;
   }
 
+  abort(reason?: string): void {
+    if (this.pending.size === 0) {
+      this.connected = false;
+      return;
+    }
+    const message = `Blender call aborted${reason ? `: ${reason}` : ""}`;
+    const error = new Error(message);
+    error.name = "AbortError";
+
+    // Snapshot first; the `finish` helper removes the entry from `pending`
+    // inside the destroy callback so iterating live would skip rejecters.
+    const entries = [...this.pending];
+    this.pending.clear();
+    for (const entry of entries) {
+      try {
+        entry.socket.destroy();
+      } catch {
+        /* destroy is best-effort; pressing on with the rejection */
+      }
+      try {
+        entry.reject(error);
+      } catch {
+        /* ditto — never let a misbehaving consumer stop the abort sweep */
+      }
+    }
+    this.connected = false;
+  }
+
   private execute(
     code: string,
     onProgress?: (chunk: string) => void
@@ -214,6 +328,8 @@ class DirectBlenderSocketClient implements BlenderMcpClient {
       // mis-classify a half-arrived progress line. Reset on every newline.
       let lineBuffer = "";
       let settled = false;
+      const pendingEntry: PendingDirectCall = { socket, reject };
+      this.pending.add(pendingEntry);
 
       const scanForProgress = (text: string): void => {
         if (!onProgress) {
@@ -244,6 +360,7 @@ class DirectBlenderSocketClient implements BlenderMcpClient {
           return;
         }
         settled = true;
+        this.pending.delete(pendingEntry);
         socket.destroy();
         if (error) {
           reject(error);
