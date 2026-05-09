@@ -77,6 +77,16 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing. The matching public key lives in
+          # apps/desktop/src-tauri/tauri.conf.json under plugins.updater.pubkey.
+          # The private key MUST be added to the repository secrets as
+          # `TAURI_SIGNING_PRIVATE_KEY` — paste the entire contents of the
+          # `.key` file produced by `pnpm exec tauri signer generate`.
+          # The password secret is intentionally empty: the keypair was
+          # generated with no password (`--password ""`). Set this secret
+          # only if you ever rotate the key under a passphrase.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: ./apps/desktop
           tauriScript: pnpm exec tauri
