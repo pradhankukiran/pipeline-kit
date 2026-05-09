@@ -2,11 +2,15 @@ import type { Approval, ID } from "@pipelinekit/core";
 import { addApproval, decideApproval, type SidecarState } from "../server/state.js";
 
 /**
- * Decision returned by the approval gate after a user (or the timeout fallback)
- * has resolved a pending step approval.
+ * Decision returned by the approval gate after a user, the timeout fallback,
+ * OR a run-level cancellation has resolved a pending step approval. The
+ * `cancelled` status is distinct from `rejected`: the user did not reject the
+ * step — the surrounding run was cancelled while we were waiting. Callers
+ * map `cancelled` to a thrown abort-style error so the orchestrator can
+ * cascade-cancel the remaining steps.
  */
 export interface ApprovalGateDecision {
-  readonly status: "approved" | "rejected";
+  readonly status: "approved" | "rejected" | "cancelled";
   readonly reason?: string;
   readonly approvalId: string;
 }
@@ -21,6 +25,16 @@ export interface ApprovalGateInput {
   readonly payload?: unknown;
   readonly timeoutMs?: number;
   readonly pollMs?: number;
+  /**
+   * Optional `AbortSignal` propagated from the surrounding pipeline run. When
+   * the signal aborts while the gate is still waiting for a decision, the
+   * gate marks its approval as `rejected` (with `reason: "Run cancelled
+   * while awaiting approval"` and `decidedBy: "system"`) and resolves to a
+   * `{ status: "cancelled" }` decision. Already-decided approvals are not
+   * affected. Without this signal the gate continues to poll until the user
+   * decides or `timeoutMs` elapses.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -53,6 +67,12 @@ export function createApprovalGate(state: SidecarState): ApprovalGate {
     };
     addApproval(state, approval);
 
+    // Fast-path the abort signal: if the run was already cancelled before we
+    // even got here, don't even register a poll cycle.
+    if (input.signal?.aborted) {
+      return cancelDueToAbort(state, approval.id);
+    }
+
     const startedAt = Date.now();
     while (true) {
       const current = state.approvals.find((entry) => entry.id === approval.id);
@@ -62,6 +82,12 @@ export function createApprovalGate(state: SidecarState): ApprovalGate {
           ...(typeof current.reason === "string" ? { reason: current.reason } : {}),
           approvalId: approval.id
         };
+      }
+
+      // Check for run cancellation before sleeping. Re-check after the sleep
+      // wakes so a signal fired mid-sleep is honored on the next iteration.
+      if (input.signal?.aborted) {
+        return cancelDueToAbort(state, approval.id);
       }
 
       if (Date.now() - startedAt >= timeoutMs) {
@@ -82,6 +108,26 @@ export function createApprovalGate(state: SidecarState): ApprovalGate {
 
       await sleep(pollMs);
     }
+  };
+}
+
+/**
+ * Mark an in-flight approval as cancelled-at-gate after the run-level abort
+ * signal fires. We persist the cancellation as a `rejected` approval (the
+ * existing storage shape only knows approved / rejected) with a distinctive
+ * reason so the audit trail is clear, and we surface a `cancelled` decision
+ * to the executor so the step error path stays separate from user rejection.
+ */
+function cancelDueToAbort(state: SidecarState, approvalId: string): ApprovalGateDecision {
+  const reason = "Run cancelled while awaiting approval";
+  decideApproval(state, approvalId, "rejected", {
+    reason,
+    decidedBy: "system"
+  });
+  return {
+    status: "cancelled",
+    reason,
+    approvalId
   };
 }
 

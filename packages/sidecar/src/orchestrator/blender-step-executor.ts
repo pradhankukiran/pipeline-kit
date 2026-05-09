@@ -186,11 +186,28 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
         operation: validatedOperation
       },
       timeoutMs: readApprovalTimeoutMs(),
-      pollMs: 500
+      pollMs: 500,
+      // Thread the run's AbortSignal so the gate's poll loop can short-circuit
+      // when the run is cancelled while a step is awaiting approval. Without
+      // this, DELETE /pipeline/runs/:id only takes effect once the gate's own
+      // timeout fires.
+      ...(context.signal ? { signal: context.signal } : {})
     });
 
+    // The gate distinguishes user-driven rejection from run-cancellation:
+    //   - rejected  -> the user clicked deny; surface the prefix
+    //                  "Step rejected:" so deriveRunStatus sets `rejected`.
+    //   - cancelled -> the run's AbortSignal fired while we were polling. We
+    //                  throw a distinctive Error so the orchestrator records
+    //                  this step as failed, then `signal.aborted` causes the
+    //                  next iteration to cancel the rest of the run.
     if (decision.status === "rejected") {
       throw new Error(`Step rejected: ${decision.reason ?? "no reason"}`);
+    }
+    if (decision.status === "cancelled") {
+      throw new Error(
+        `Step cancelled while awaiting approval: ${decision.reason ?? "run cancelled"}`
+      );
     }
 
     return runOpAndMaybeCheckpoint();
