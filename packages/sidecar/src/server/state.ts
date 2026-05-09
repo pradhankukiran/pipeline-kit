@@ -8,6 +8,8 @@ import type {
 } from "@pipelinekit/core";
 import type { PipelineStepResult } from "../contracts.js";
 import {
+  archiveEvictedOperations,
+  archiveEvictedRuns,
   createJsonFileStore,
   STATE_SCHEMA_VERSION,
   type JsonFileStore,
@@ -86,8 +88,8 @@ export interface InitialStateLoadResult {
   readonly loadedFromDisk: boolean;
 }
 
-const MAX_RECENT_OPERATIONS = 20;
-const MAX_PIPELINE_RUNS = 20;
+const MAX_RECENT_OPERATIONS = 200;
+const MAX_PIPELINE_RUNS = 200;
 
 export function createSidecarState(): SidecarState {
   return {
@@ -177,11 +179,42 @@ export function recordOperation(
         ? entry.projectId
         : state.activeProjectId ?? null;
   const next: RecentOperation = { ...entry, projectId: resolvedProjectId };
-  state.recentOperations = [next, ...state.recentOperations].slice(0, MAX_RECENT_OPERATIONS);
+  const combined = [next, ...state.recentOperations];
+  const evicted = combined.slice(MAX_RECENT_OPERATIONS);
+  state.recentOperations = combined.slice(0, MAX_RECENT_OPERATIONS);
+  if (evicted.length > 0) {
+    void archiveEvictedOperations(evicted);
+  }
+}
+
+/**
+ * Prepends a batch of operation entries (e.g. one per Blender step in a
+ * pipeline run) and archives any rows pushed past the in-memory cap. Exposed
+ * so callers that previously did `state.recentOperations = […].slice(0, 20)`
+ * inline can switch to a single helper without losing eviction history.
+ */
+export function recordOperationBatch(
+  state: SidecarState,
+  entries: readonly RecentOperation[]
+): void {
+  if (entries.length === 0) {
+    return;
+  }
+  const combined = [...entries, ...state.recentOperations];
+  const evicted = combined.slice(MAX_RECENT_OPERATIONS);
+  state.recentOperations = combined.slice(0, MAX_RECENT_OPERATIONS);
+  if (evicted.length > 0) {
+    void archiveEvictedOperations(evicted);
+  }
 }
 
 export function recordPipelineRun(state: SidecarState, run: PipelineRunRecord): void {
-  state.pipelineRuns = [run, ...state.pipelineRuns].slice(0, MAX_PIPELINE_RUNS);
+  const combined = [run, ...state.pipelineRuns];
+  const evicted = combined.slice(MAX_PIPELINE_RUNS);
+  state.pipelineRuns = combined.slice(0, MAX_PIPELINE_RUNS);
+  if (evicted.length > 0) {
+    void archiveEvictedRuns(evicted);
+  }
 }
 
 export type PipelineRunPatch = Partial<
@@ -429,6 +462,9 @@ function normalizeExecutableName(value: string): string {
 }
 
 function sanitizeRecentOperations(items: readonly RecentOperation[]): RecentOperation[] {
+  if (!Array.isArray(items)) {
+    return [];
+  }
   return items.slice(0, MAX_RECENT_OPERATIONS).filter((item): item is RecentOperation => {
     return isRecord(item) && isRecord(item.operation) && isRecord(item.result);
   });

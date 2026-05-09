@@ -1,8 +1,16 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Approval, Project } from "@pipelinekit/core";
 import type { PipelineRunRecord, RecentOperation, SidecarSettings } from "./state.js";
+
+declare module "node:fs/promises" {
+  export function appendFile(
+    path: string,
+    data: string,
+    options: { encoding: "utf8" }
+  ): Promise<void>;
+}
 
 const CURRENT_SCHEMA_VERSION = 2;
 const SUPPORTED_SCHEMA_VERSIONS = new Set<number>([1, 2]);
@@ -111,4 +119,103 @@ function warn(message: string): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Returns the absolute directory in which evicted history entries are
+ * archived. Honours `PIPELINEKIT_ARCHIVE_DIR` when set to a non-empty value,
+ * falling back to `~/.pipelinekit/archive`. Mirrors `getRenderDir()` so
+ * operators only have one home-dir convention to learn.
+ */
+export function getArchiveDir(): string {
+  const override = process.env["PIPELINEKIT_ARCHIVE_DIR"];
+  if (typeof override === "string" && override.trim().length > 0) {
+    return override.trim();
+  }
+
+  return join(homedir(), ".pipelinekit", "archive");
+}
+
+/**
+ * Appends evicted pipeline-run records to a monthly JSONL archive.
+ *
+ * - One JSON object per line, partitioned by `<archiveDir>/runs-YYYY-MM.jsonl`
+ *   derived from each entry's `startedAt` (falling back to "now" when the
+ *   field is missing or unparseable).
+ * - Failures are logged to stderr but never re-thrown — the in-memory cap
+ *   eviction must succeed even if disk is full or read-only.
+ */
+export async function archiveEvictedRuns(
+  entries: readonly PipelineRunRecord[]
+): Promise<void> {
+  if (entries.length === 0) {
+    return;
+  }
+
+  const archiveDir = getArchiveDir();
+  try {
+    await mkdir(archiveDir, { recursive: true });
+  } catch (error) {
+    warn(`Failed to create archive dir at ${archiveDir}: ${errorMessage(error)}`);
+    return;
+  }
+
+  // Group by month so we issue one append per file.
+  const grouped = new Map<string, PipelineRunRecord[]>();
+  for (const entry of entries) {
+    const partition = monthPartition(entry.startedAt);
+    const bucket = grouped.get(partition) ?? [];
+    bucket.push(entry);
+    grouped.set(partition, bucket);
+  }
+
+  for (const [partition, bucket] of grouped) {
+    const filePath = join(archiveDir, `runs-${partition}.jsonl`);
+    const payload = bucket.map((entry) => `${JSON.stringify(entry)}\n`).join("");
+    try {
+      await appendFile(filePath, payload, { encoding: "utf8" });
+    } catch (error) {
+      warn(`Failed to append archive file ${filePath}: ${errorMessage(error)}`);
+    }
+  }
+}
+
+/**
+ * Appends evicted recent-operations entries to a monthly JSONL archive.
+ *
+ * Operations don't carry a timestamp of their own (the wrapper `result` may,
+ * but it's free-form per provider), so we partition by current wall-clock
+ * time. Same fire-and-forget semantics as `archiveEvictedRuns`.
+ */
+export async function archiveEvictedOperations(
+  entries: readonly RecentOperation[]
+): Promise<void> {
+  if (entries.length === 0) {
+    return;
+  }
+
+  const archiveDir = getArchiveDir();
+  try {
+    await mkdir(archiveDir, { recursive: true });
+  } catch (error) {
+    warn(`Failed to create archive dir at ${archiveDir}: ${errorMessage(error)}`);
+    return;
+  }
+
+  const partition = monthPartition(new Date().toISOString());
+  const filePath = join(archiveDir, `operations-${partition}.jsonl`);
+  const payload = entries.map((entry) => `${JSON.stringify(entry)}\n`).join("");
+  try {
+    await appendFile(filePath, payload, { encoding: "utf8" });
+  } catch (error) {
+    warn(`Failed to append archive file ${filePath}: ${errorMessage(error)}`);
+  }
+}
+
+function monthPartition(isoLike: string | undefined): string {
+  const candidate = typeof isoLike === "string" ? new Date(isoLike) : new Date();
+  const date = Number.isNaN(candidate.getTime()) ? new Date() : candidate;
+  const year = date.getUTCFullYear().toString().padStart(4, "0");
+  const month = (date.getUTCMonth() + 1).toString().padStart(2, "0");
+  return `${year}-${month}`;
 }
