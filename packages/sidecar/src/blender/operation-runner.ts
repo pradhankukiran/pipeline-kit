@@ -446,13 +446,32 @@ function createOperationResult(
   return {
     operationId: operation.id,
     status: failure ? "failed" : "succeeded",
-    summary: failure ?? `Ran Blender operation ${operation.type}.`,
+    summary: failure ? summarizeFailure(failure) : `Ran Blender operation ${operation.type}.`,
     artifacts: artifactsForOperation(operation, mcpResult),
     error: failure,
     completedAt: new Date().toISOString()
   };
 }
 
+/**
+ * Detect a Blender MCP failure using STRUCTURED signals only — never substring
+ * matching for words like "error" or "failed" (which produced false positives
+ * on benign log lines, scene objects literally named `Error`, etc.).
+ *
+ * Detection priority:
+ *   1. `output.isError === true` — the MCP transport's own failure flag.
+ *   2. The JSON envelope our emitted Python prints. We scan the LAST line of
+ *      the MCP text payload that looks like `{...}`. If the envelope contains
+ *      `{ error: <truthy string> }` or `{ ok: false, error: ... }`, surface
+ *      that error string.
+ *   3. `output.structuredContent.result` parsed as JSON — only treat as a
+ *      failure when it explicitly carries an `error` field.
+ *   4. A Python traceback marker: `^Traceback (most recent call last):` at the
+ *      START of a line (multiline-anchored). This is dramatically tighter than
+ *      a substring search.
+ *
+ * Anything that doesn't match these structured signals is treated as success.
+ */
 function extractMcpFailure(output: unknown): string | undefined {
   if (!isRecord(output)) {
     return undefined;
@@ -462,14 +481,100 @@ function extractMcpFailure(output: unknown): string | undefined {
     return readMcpText(output) ?? "Blender MCP reported a tool error.";
   }
 
-  const structured = isRecord(output["structuredContent"]) ? output["structuredContent"] : undefined;
-  const structuredResult = structured?.["result"];
-  if (typeof structuredResult === "string" && looksLikeError(structuredResult)) {
-    return structuredResult;
+  // Priority 2: scan the MCP text payload for an emitted JSON envelope error.
+  const text = readMcpText(output);
+  if (text) {
+    const envelopeError = extractEnvelopeError(text);
+    if (envelopeError) {
+      return envelopeError;
+    }
   }
 
-  const text = readMcpText(output);
-  return text && looksLikeError(text) ? text : undefined;
+  // Priority 3: structuredContent.result, but ONLY when it parses to an
+  // object with an explicit `error` field.
+  const structured = isRecord(output["structuredContent"]) ? output["structuredContent"] : undefined;
+  const structuredResult = structured?.["result"];
+  if (typeof structuredResult === "string") {
+    const fromStructured = extractEnvelopeError(structuredResult);
+    if (fromStructured) {
+      return fromStructured;
+    }
+  } else if (isRecord(structuredResult)) {
+    const direct = readErrorField(structuredResult);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  // Priority 4: anchored Python traceback. The traceback line itself plus the
+  // exception body are returned so the artifact log carries the full context.
+  if (text && /^Traceback \(most recent call last\):/m.test(text)) {
+    return text;
+  }
+
+  return undefined;
+}
+
+/**
+ * Walks the supplied text bottom-up looking for a `{...}` JSON envelope with a
+ * truthy `error` field (or `ok: false` with an error message). Returns the
+ * extracted error string, or undefined when no envelope matches.
+ */
+function extractEnvelopeError(text: string): string | undefined {
+  for (const line of text.split(/\r?\n/).reverse()) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (!isRecord(parsed)) {
+      continue;
+    }
+    const direct = readErrorField(parsed);
+    if (direct) {
+      return direct;
+    }
+  }
+  return undefined;
+}
+
+function readErrorField(record: Record<string, unknown>): string | undefined {
+  // `{ error: <string> }` or `{ ok: false, error: <string> }`.
+  const errorValue = record["error"];
+  if (typeof errorValue === "string" && errorValue.length > 0) {
+    return errorValue;
+  }
+  if (record["ok"] === false) {
+    if (typeof errorValue === "string" && errorValue.length > 0) {
+      return errorValue;
+    }
+    return "Blender MCP reported ok=false without an error message.";
+  }
+  return undefined;
+}
+
+/**
+ * Build a short user-facing summary string from a failure body. When the body
+ * carries a Python traceback, return only the LAST non-empty line (the
+ * `<ExceptionType>: <message>` line) so the UI shows a one-liner instead of
+ * the full traceback. Full traceback still goes into the artifact log.
+ */
+function summarizeFailure(failure: string): string {
+  if (/^Traceback \(most recent call last\):/m.test(failure)) {
+    const lines = failure.split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const candidate = lines[i]?.trim();
+      if (candidate && candidate.length > 0) {
+        return candidate;
+      }
+    }
+  }
+  return failure;
 }
 
 function readMcpText(output: Record<string, unknown>): string | undefined {
@@ -482,10 +587,6 @@ function readMcpText(output: Record<string, unknown>): string | undefined {
     .map((item) => (isRecord(item) && typeof item["text"] === "string" ? item["text"] : undefined))
     .filter((item): item is string => Boolean(item))
     .join("\n");
-}
-
-function looksLikeError(value: string): boolean {
-  return /(^|\b)(error|failed|traceback|could not connect)\b/i.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
