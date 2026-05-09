@@ -41,8 +41,23 @@
       "resources/pipelinekit-sidecar.cjs"
     ],
     "category": "public.app-category.graphics-design",
+    "fileAssociations": [
+      {
+        "ext": ["json"],
+        "name": "PipelineKitProject",
+        "description": "PipelineKit project bundle",
+        "mimeType": "application/json",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ],
     "macOS": {
       "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      }
     }
   }
 }
