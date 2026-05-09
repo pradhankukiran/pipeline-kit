@@ -106,6 +106,10 @@ export class BlenderOperationAdapter {
 
       return run.result;
     } catch (error) {
+      if (isOperationValidationError(error)) {
+        return createFailedResult(operation, errorMessage(error));
+      }
+
       this.state.blender = {
         connected: false,
         mode: "fallback",
@@ -224,6 +228,25 @@ function createFallbackResult(operation: JsonOperation, error?: string): Operati
   };
 }
 
+function createFailedResult(operation: JsonOperation, message: string): OperationResult {
+  return {
+    operationId: operation.id,
+    status: "failed",
+    summary: message,
+    artifacts: [
+      {
+        kind: "log",
+        inlineJson: {
+          operation,
+          reason: message
+        }
+      }
+    ],
+    error: message,
+    completedAt: new Date().toISOString()
+  };
+}
+
 function tryBuildFallbackScript(operation: JsonOperation): string | undefined {
   try {
     return buildBlenderPythonScript(operation as unknown as BlenderOperation);
@@ -251,9 +274,15 @@ function readMcpFailureMessage(output: unknown): string | undefined {
 
 async function verifyBlenderScene(client: BlenderMcpClient): Promise<void> {
   const result = await client.call({
-    name: "get_scene_info",
+    name: readScriptToolName(),
     arguments: {
-      user_prompt: "PipelineKit Blender connection check"
+      [readScriptArgumentName()]: [
+        "import bpy",
+        "result = {",
+        '    "ok": True,',
+        '    "scene": bpy.context.scene.name,',
+        "}"
+      ].join("\n")
     }
   });
   const error = extractToolError(result.output);
@@ -349,6 +378,10 @@ function readString(value: unknown, fallback: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isOperationValidationError(error: unknown): boolean {
+  return error instanceof Error && error.name === "ZodError";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

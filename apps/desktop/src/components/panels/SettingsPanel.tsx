@@ -102,7 +102,7 @@ export function SettingsPanel({
                   id="settings-blender-args"
                   value={settings.blenderMcpArgs}
                   onChange={(event) => onChange("blenderMcpArgs", event.target.value)}
-                  placeholder="Leave empty for the Windows Blender socket"
+                  placeholder="Leave empty for the Blender socket"
                   spellCheck={false}
                   autoComplete="off"
                 />

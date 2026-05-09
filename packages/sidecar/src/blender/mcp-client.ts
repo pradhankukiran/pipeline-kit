@@ -329,7 +329,7 @@ function shouldUseDirectSocket(options: BlenderMcpClientOptions): boolean {
     return true;
   }
 
-  return process.platform === "win32";
+  return false;
 }
 
 function readPort(raw: string | undefined, fallback: number): number {

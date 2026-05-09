@@ -367,15 +367,65 @@ function mergeSettings(base: SidecarSettings, persisted: SidecarSettings): Sidec
           : base.models.openRouterApiKey,
       codexModel: persisted.models?.codexModel ?? base.models.codexModel
     },
-    blender: {
-      command: persisted.blender?.command ?? base.blender.command,
-      args: Array.isArray(persisted.blender?.args) ? persisted.blender.args : base.blender.args,
-      autoConnect:
-        typeof persisted.blender?.autoConnect === "boolean"
-          ? persisted.blender.autoConnect
-          : base.blender.autoConnect
-    }
+    blender: mergeBlenderSettings(base.blender, persisted.blender)
   };
+}
+
+function mergeBlenderSettings(
+  base: BlenderMcpSettings,
+  persisted: BlenderMcpSettings | undefined
+): BlenderMcpSettings {
+  if (!persisted) {
+    return base;
+  }
+
+  const command =
+    typeof persisted.command === "string" && persisted.command.trim().length > 0
+      ? persisted.command.trim()
+      : base.command;
+  const args = readStringArray(persisted.args, base.args);
+  const autoConnect =
+    typeof persisted.autoConnect === "boolean" ? persisted.autoConnect : base.autoConnect;
+
+  if (shouldMigrateLegacyBlenderMcpSettings(command, args)) {
+    return {
+      ...base,
+      autoConnect
+    };
+  }
+
+  return {
+    command,
+    args,
+    autoConnect
+  };
+}
+
+function shouldMigrateLegacyBlenderMcpSettings(
+  command: string,
+  args: readonly string[]
+): boolean {
+  const executable = normalizeExecutableName(command);
+  const normalizedArgs = args.map((arg) => arg.trim().toLowerCase()).filter(Boolean);
+  if (executable === "blender-mcp") {
+    return true;
+  }
+
+  if (executable === "uvx" && normalizedArgs[0] === "blender-mcp") {
+    return true;
+  }
+
+  return (
+    executable === "cmd" &&
+    normalizedArgs[0] === "/c" &&
+    normalizeExecutableName(normalizedArgs[1] ?? "") === "uvx" &&
+    normalizedArgs[2] === "blender-mcp"
+  );
+}
+
+function normalizeExecutableName(value: string): string {
+  const fileName = value.trim().replace(/\\/g, "/").split("/").pop() ?? "";
+  return fileName.toLowerCase().replace(/\.exe$/u, "");
 }
 
 function sanitizeRecentOperations(items: readonly RecentOperation[]): RecentOperation[] {
@@ -527,9 +577,6 @@ function createInitialBlenderState(): BlenderConnectionState {
 }
 
 function createDefaultSettings(): SidecarSettings {
-  const defaultBlenderCommand = process.platform === "win32" ? "blender-socket" : "uvx";
-  const defaultBlenderArgs = process.platform === "win32" ? [] : ["blender-mcp"];
-
   return {
     models: {
       groqModel: process.env["PIPELINEKIT_GROQ_MODEL"] ?? "llama-3.1-8b-instant",
@@ -541,8 +588,8 @@ function createDefaultSettings(): SidecarSettings {
       codexModel: process.env["PIPELINEKIT_CODEX_MODEL"] ?? "gpt-5-codex"
     },
     blender: {
-      command: process.env["PIPELINEKIT_BLENDER_MCP_COMMAND"] ?? defaultBlenderCommand,
-      args: readEnvArgs(process.env["PIPELINEKIT_BLENDER_MCP_ARGS"]) ?? defaultBlenderArgs,
+      command: process.env["PIPELINEKIT_BLENDER_MCP_COMMAND"] ?? "blender-socket",
+      args: readEnvArgs(process.env["PIPELINEKIT_BLENDER_MCP_ARGS"]) ?? [],
       autoConnect: process.env["PIPELINEKIT_BLENDER_MCP_AUTOCONNECT"] === "1"
     }
   };
