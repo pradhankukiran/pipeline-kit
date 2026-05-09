@@ -44,7 +44,9 @@ export type PipelineStepResult = {
 /**
  * Sidecar-local extension of `@pipelinekit/core`'s `PipelineRunEvent` union.
  * Adds `pipeline.cancelled` so SSE consumers can distinguish a graceful
- * cancellation from a normal `pipeline.completed` event.
+ * cancellation from a normal `pipeline.completed` event, and `step.progress`
+ * for in-flight progress chunks (e.g. Blender render samples / tiles) so the
+ * UI can show "Sample 64/256" while a long step is still running.
  */
 export type PipelineEvent =
   | {
@@ -55,6 +57,15 @@ export type PipelineEvent =
       readonly type: "step.started";
       readonly pipelineId: ID;
       readonly step: PipelineStep;
+    }
+  | {
+      readonly type: "step.progress";
+      readonly pipelineId: ID;
+      readonly stepId: ID;
+      readonly message?: string;
+      readonly percent?: number;
+      readonly data?: unknown;
+      readonly emittedAt?: string;
     }
   | {
       readonly type: "step.completed";

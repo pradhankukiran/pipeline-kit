@@ -87,7 +87,10 @@ export class BlenderOperationAdapter {
     }
   }
 
-  async runOperation(operation: JsonOperation): Promise<OperationResult> {
+  async runOperation(
+    operation: JsonOperation,
+    options: { readonly onProgress?: (chunk: string) => void } = {}
+  ): Promise<OperationResult> {
     if (!this.state.blender.connected) {
       return createFallbackResult(operation, this.state.blender.lastError);
     }
@@ -99,7 +102,7 @@ export class BlenderOperationAdapter {
         scriptArgumentName: readScriptArgumentName()
       });
       const run = await withTimeout(
-        runner.run(operation),
+        runner.run(operation, options.onProgress ? { onProgress: options.onProgress } : undefined),
         this.timeoutMs,
         "Blender MCP operation"
       );
@@ -134,7 +137,10 @@ export class BlenderOperationAdapter {
    * tool. Returns the MCP tool output. Throws if Blender is not connected
    * or the tool call fails / times out.
    */
-  async runPython(code: string): Promise<BlenderMcpResult> {
+  async runPython(
+    code: string,
+    options: { readonly onProgress?: (chunk: string) => void } = {}
+  ): Promise<BlenderMcpResult> {
     if (!this.state.blender.connected) {
       throw new Error(this.state.blender.lastError ?? "Blender MCP is not connected.");
     }
@@ -145,7 +151,8 @@ export class BlenderOperationAdapter {
           name: readScriptToolName(),
           arguments: {
             [readScriptArgumentName()]: code
-          }
+          },
+          ...(options.onProgress ? { onProgress: options.onProgress } : {})
         }),
         this.timeoutMs,
         "Blender MCP runPython"

@@ -32,6 +32,12 @@ export interface ModelProvider {
   complete(request: ModelRequest): Promise<ModelResponse>;
 }
 
+export interface StepProgressPayload {
+  readonly message?: string;
+  readonly percent?: number;
+  readonly data?: unknown;
+}
+
 export interface PipelineStepContext {
   readonly input: PipelineInput;
   readonly step: PipelineStep;
@@ -45,6 +51,14 @@ export interface PipelineStepContext {
    * in-flight bpy execution.
    */
   readonly signal?: AbortSignal;
+  /**
+   * Fire-and-forget progress reporter. When supplied, executors call this to
+   * surface in-flight progress chunks (e.g. Blender render samples / tiles)
+   * to the orchestrator's event sink as `step.progress` events. Implementations
+   * MUST be synchronous and MUST NOT throw — the orchestrator's wrapper
+   * swallows errors so a buggy emitter cannot crash a running step.
+   */
+  readonly emitProgress?: (payload: StepProgressPayload) => void;
 }
 
 export interface PipelineStepExecutor {

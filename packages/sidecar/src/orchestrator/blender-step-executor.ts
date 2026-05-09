@@ -5,12 +5,20 @@ import type {
 } from "@pipelinekit/core";
 import { validateBlenderOperation } from "@pipelinekit/core";
 import type { BlenderMcpClient } from "../blender/mcp-client.js";
-import type { ModelProvider, PipelineStepContext, PipelineStepExecutor } from "../providers/types.js";
+import type {
+  ModelProvider,
+  PipelineStepContext,
+  PipelineStepExecutor,
+  StepProgressPayload
+} from "../providers/types.js";
 import type { SidecarState } from "../server/state.js";
 import type { ApprovalGate } from "./approval-gate.js";
 
 export interface BlenderOperationCallable {
-  runOperation(operation: BlenderOperation): Promise<OperationResult>;
+  runOperation(
+    operation: BlenderOperation,
+    options?: { readonly onProgress?: (chunk: string) => void }
+  ): Promise<OperationResult>;
 }
 
 export interface BlenderStepExecutorOptions {
@@ -113,10 +121,15 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
       }
     }
 
+    const onProgress = buildBlenderProgressHandler(context);
+
     const runOp = async (): Promise<unknown> => {
       if (validatedOperation) {
         // operationRunner presence is guaranteed above when validatedOperation is set.
-        const result = await this.operationRunner!.runOperation(validatedOperation);
+        const result = await this.operationRunner!.runOperation(
+          validatedOperation,
+          onProgress ? { onProgress } : undefined
+        );
         if (result.status !== "succeeded") {
           throw new Error(result.error ?? result.summary);
         }
@@ -131,7 +144,8 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
         }
         const result = await this.mcpClient.call({
           name: this.scriptToolName,
-          arguments: { [this.scriptArgumentName]: pythonSource }
+          arguments: { [this.scriptArgumentName]: pythonSource },
+          ...(onProgress ? { onProgress } : {})
         });
         return result.output;
       }
@@ -413,4 +427,90 @@ function readApprovalTimeoutMs(): number {
     }
   }
   return DEFAULT_APPROVAL_TIMEOUT_MS;
+}
+
+/**
+ * Builds the per-step `onProgress(chunk)` adapter that bridges raw Blender
+ * stdout lines into the orchestrator's `step.progress` event sink.
+ *
+ * Returns `undefined` when `context.emitProgress` isn't wired (e.g. legacy
+ * orchestrator or unit-test contexts) so the executor can skip threading
+ * `onProgress` through entirely.
+ *
+ * The callback is fire-and-forget by contract: it must not throw, and it
+ * does not await the publish. All errors (including a misbehaving emitter)
+ * are swallowed so a buggy progress line never aborts a render.
+ */
+export function buildBlenderProgressHandler(
+  context: PipelineStepContext
+): ((chunk: string) => void) | undefined {
+  const emit = context.emitProgress;
+  if (!emit) {
+    return undefined;
+  }
+  return (chunk: string): void => {
+    try {
+      const percent = parseBlenderProgressPercent(chunk);
+      const payload: StepProgressPayload = {
+        message: chunk,
+        ...(typeof percent === "number" ? { percent } : {})
+      };
+      emit(payload);
+    } catch {
+      // Fire-and-forget — never crash the render on a bad progress chunk.
+    }
+  };
+}
+
+/**
+ * Best-effort percent inference from a single Blender progress line.
+ * Returns a value in [0, 100] when a recognized "X / Y" denominator pattern
+ * is present, otherwise `undefined`. Patterns matched, in priority order:
+ *
+ *   - `Sample 64/256` -> 25%   (Cycles progressive samples)
+ *   - `Sample 64 / 256` (whitespace tolerant)
+ *   - `Tile 23/64` -> 36%      (older Cycles tile mode)
+ *   - `Rendered 12/100 Tiles` -> 12% (pre-4.x Cycles header)
+ *
+ * False negatives are fine — the message itself still gets surfaced; only
+ * the explicit `percent` field stays unset. We deliberately do not parse
+ * `Fra:` / `Saved:` / `Compositing` lines because they don't carry a
+ * stable progress denominator.
+ */
+export function parseBlenderProgressPercent(chunk: string): number | undefined {
+  const sample = /Sample\s+(\d+)\s*\/\s*(\d+)/i.exec(chunk);
+  if (sample) {
+    return clampPercent(sample[1], sample[2]);
+  }
+  const tile = /Tile\s+(\d+)\s*\/\s*(\d+)/i.exec(chunk);
+  if (tile) {
+    return clampPercent(tile[1], tile[2]);
+  }
+  const rendered = /Rendered\s+(\d+)\s*\/\s*(\d+)\s+Tiles/i.exec(chunk);
+  if (rendered) {
+    return clampPercent(rendered[1], rendered[2]);
+  }
+  return undefined;
+}
+
+function clampPercent(numerator: string | undefined, denominator: string | undefined): number | undefined {
+  if (!numerator || !denominator) {
+    return undefined;
+  }
+  const num = Number.parseInt(numerator, 10);
+  const den = Number.parseInt(denominator, 10);
+  if (!Number.isFinite(num) || !Number.isFinite(den) || den <= 0) {
+    return undefined;
+  }
+  const ratio = (num / den) * 100;
+  if (!Number.isFinite(ratio)) {
+    return undefined;
+  }
+  if (ratio < 0) {
+    return 0;
+  }
+  if (ratio > 100) {
+    return 100;
+  }
+  return ratio;
 }

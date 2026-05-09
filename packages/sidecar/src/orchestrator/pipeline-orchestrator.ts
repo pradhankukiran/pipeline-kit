@@ -134,11 +134,43 @@ export class PipelineOrchestrator {
 
     await this.publish({ type: "step.started", pipelineId: definition.id, step });
 
+    // Fire-and-forget progress reporter wired into the event sink. Errors
+    // (sink throws, eventSink missing, etc.) are swallowed — a misbehaving
+    // emitter must NEVER crash the running step.
+    const emitProgress = (payload: { message?: string; percent?: number; data?: unknown }): void => {
+      try {
+        const sink = this.eventSink;
+        if (!sink) {
+          return;
+        }
+        const event: Parameters<PipelineEventSink["publish"]>[0] = {
+          type: "step.progress",
+          pipelineId: definition.id,
+          stepId: step.id,
+          ...(typeof payload.message === "string" ? { message: payload.message } : {}),
+          ...(typeof payload.percent === "number" && Number.isFinite(payload.percent)
+            ? { percent: payload.percent }
+            : {}),
+          ...(payload.data !== undefined ? { data: payload.data } : {}),
+          emittedAt: new Date().toISOString()
+        };
+        // Synchronous publish only. If the sink returns a promise we discard
+        // it — progress events are best-effort.
+        const maybe = sink.publish(event);
+        if (maybe && typeof (maybe as Promise<void>).then === "function") {
+          void (maybe as Promise<void>).catch(() => undefined);
+        }
+      } catch {
+        // Swallow — progress is fire-and-forget by contract.
+      }
+    };
+
     try {
       const output = await executor.execute({
         input: definition.input,
         step,
         priorOutputs,
+        emitProgress,
         ...(signal ? { signal } : {})
       });
       const result: PipelineStepResult = {

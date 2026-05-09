@@ -9,6 +9,14 @@ import { Socket } from "node:net";
 export interface BlenderMcpCommand {
   readonly name: string;
   readonly arguments?: Record<string, unknown>;
+  /**
+   * Optional fire-and-forget progress callback. The transport scans any
+   * pre-final-envelope bytes line-by-line and invokes this for each line that
+   * looks like a Blender render progress chunk (Fra:/Sample/Tile/etc.). The
+   * SDK stdio transport does not currently surface progress; only the direct
+   * socket transport supports this.
+   */
+  readonly onProgress?: (chunk: string) => void;
 }
 
 export interface BlenderMcpResult {
@@ -182,7 +190,7 @@ class DirectBlenderSocketClient implements BlenderMcpClient {
 
   async call(command: BlenderMcpCommand): Promise<BlenderMcpResult> {
     const code = command.name === "get_scene_info" ? sceneInfoScript() : readCodeArgument(command);
-    const output = await this.execute(code);
+    const output = await this.execute(code, command.onProgress);
     this.connected = true;
 
     return {
@@ -195,11 +203,41 @@ class DirectBlenderSocketClient implements BlenderMcpClient {
     this.connected = false;
   }
 
-  private execute(code: string): Promise<DirectBlenderResponse> {
+  private execute(
+    code: string,
+    onProgress?: (chunk: string) => void
+  ): Promise<DirectBlenderResponse> {
     return new Promise((resolve, reject) => {
       const socket = new Socket();
       const chunks: Uint8Array[] = [];
+      // Holds a partial trailing line across multiple data events so we never
+      // mis-classify a half-arrived progress line. Reset on every newline.
+      let lineBuffer = "";
       let settled = false;
+
+      const scanForProgress = (text: string): void => {
+        if (!onProgress) {
+          return;
+        }
+        // Only forward lines that look like Blender render progress. The
+        // final NUL-terminated JSON envelope is intentionally excluded
+        // because (a) it doesn't match these patterns and (b) it never
+        // arrives line-by-line — `data` only contains it once NUL appears.
+        for (const line of text.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (trimmed.length === 0) {
+            continue;
+          }
+          if (looksLikeBlenderProgress(trimmed)) {
+            try {
+              onProgress(trimmed);
+            } catch {
+              // Fire-and-forget: a misbehaving consumer must never abort
+              // the underlying socket call.
+            }
+          }
+        }
+      };
 
       const finish = (error?: Error, response?: DirectBlenderResponse) => {
         if (settled) {
@@ -224,7 +262,40 @@ class DirectBlenderSocketClient implements BlenderMcpClient {
       socket.on("error", (error) => finish(error));
       socket.on("data", (chunk) => {
         chunks.push(chunk);
-        if (chunk.includes(0)) {
+        const hasTerminator = chunk.includes(0);
+
+        // Best-effort line-based progress scan on the not-yet-terminal bytes.
+        // We strip the NUL byte (and anything past it, which would be the
+        // start of the JSON envelope) so the envelope never reaches the
+        // progress callback. `Buffer.concat([chunk])` is a no-op copy used
+        // here only to obtain a Buffer with a typed `toString("utf8")`.
+        if (onProgress) {
+          let text = Buffer.concat([chunk]).toString("utf8");
+          const nulIdx = text.indexOf("\0");
+          if (nulIdx >= 0) {
+            text = text.slice(0, nulIdx);
+          }
+          if (text.length > 0) {
+            const combined = lineBuffer + text;
+            const newlineIdx = combined.lastIndexOf("\n");
+            if (newlineIdx >= 0) {
+              const complete = combined.slice(0, newlineIdx);
+              lineBuffer = combined.slice(newlineIdx + 1);
+              scanForProgress(complete);
+            } else {
+              lineBuffer = combined;
+            }
+          }
+          if (hasTerminator) {
+            // Any trailing pre-NUL line that didn't end with `\n`.
+            if (lineBuffer.length > 0) {
+              scanForProgress(lineBuffer);
+              lineBuffer = "";
+            }
+          }
+        }
+
+        if (hasTerminator) {
           finish(undefined, parseDirectResponse(Buffer.concat(chunks)));
         }
       });
@@ -243,6 +314,22 @@ class DirectBlenderSocketClient implements BlenderMcpClient {
       });
     });
   }
+}
+
+/**
+ * Heuristic match for a single Blender progress line. Mirrors the patterns
+ * Blender prints during a render:
+ *   - `Fra:1 Mem:... Sce: Scene` (frame header)
+ *   - `Rendered 23 Tiles, ...`
+ *   - `Sample 64/256` (Cycles progressive)
+ *   - `Tile 23/64` (older Cycles tile mode)
+ *   - `Compositing | Tile 5-23` (compositor)
+ *   - `Saved: '<path>' Time: 00:01.23` (final write-out line)
+ * Case-insensitive. Used by the direct socket transport's progress scanner;
+ * intentionally permissive — false positives just become extra UI ticks.
+ */
+export function looksLikeBlenderProgress(line: string): boolean {
+  return /^Fra:|^\s*Rendered \d+|Sample \d+\/\d+|Tile \d+\/\d+|^Compositing|^Saved:/i.test(line);
 }
 
 interface DirectBlenderResponse {

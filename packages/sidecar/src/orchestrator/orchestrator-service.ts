@@ -429,13 +429,15 @@ export class OrchestratorService {
         async call(command): Promise<BlenderMcpResult> {
           // The executor only ever invokes this with the script tool name
           // (default "execute_blender_code"). Route through the adapter so
-          // its timeout/disconnect-on-error semantics apply.
+          // its timeout/disconnect-on-error semantics apply, and forward
+          // the optional `onProgress` callback so live render progress
+          // chunks reach the orchestrator's event sink.
           const argName = Object.keys(command.arguments ?? {})[0] ?? "code";
           const code = (command.arguments as Record<string, unknown> | undefined)?.[argName];
           if (typeof code !== "string") {
             throw new Error(`Blender mcp call requires a string '${argName}' argument.`);
           }
-          return adapter.runPython(code);
+          return adapter.runPython(code, command.onProgress ? { onProgress: command.onProgress } : {});
         },
         async close() {
           /* adapter owns the underlying client lifecycle */
@@ -444,8 +446,14 @@ export class OrchestratorService {
       executors.push(
         new BlenderStepExecutor({
           operationRunner: {
-            runOperation: (operation: BlenderOperation) =>
-              this.blender.runOperation(operation as unknown as JsonOperation)
+            runOperation: (
+              operation: BlenderOperation,
+              options?: { readonly onProgress?: (chunk: string) => void }
+            ) =>
+              this.blender.runOperation(
+                operation as unknown as JsonOperation,
+                options?.onProgress ? { onProgress: options.onProgress } : {}
+              )
           },
           mcpClient: mcpClientShim,
           gate: createApprovalGate(this.state),

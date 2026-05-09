@@ -79,14 +79,20 @@ export class BlenderOperationRunner {
     };
   }
 
-  async run(operation: unknown): Promise<BlenderOperationRunResult> {
+  async run(
+    operation: unknown,
+    options: { readonly onProgress?: (chunk: string) => void } = {}
+  ): Promise<BlenderOperationRunResult> {
     const prepared = this.buildScript(operation);
-    const mcpResult = await this.client.call(prepared.command);
+    const command: BlenderMcpCommand = options.onProgress
+      ? { ...prepared.command, onProgress: options.onProgress }
+      : prepared.command;
+    const mcpResult = await this.client.call(command);
     const result = createOperationResult(prepared.operation, mcpResult);
 
     return {
       operation: prepared.operation,
-      command: prepared.command,
+      command,
       mcpResult,
       result
     };
