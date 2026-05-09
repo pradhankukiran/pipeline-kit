@@ -535,6 +535,13 @@ export class OrchestratorService {
                 forward.context = options.context;
               }
               return this.blender.runOperation(operation as unknown as JsonOperation, forward);
+            },
+            abort: (reason?: string) => {
+              // Tears down the same memoized BlenderMcpClient that the
+              // adapter holds. Required so the executor's signal-driven
+              // abort can reach typed-operation runs (mcpClientShim only
+              // covers the python-fallback path).
+              this.blender.abort(reason);
             }
           },
           mcpClient: mcpClientShim,

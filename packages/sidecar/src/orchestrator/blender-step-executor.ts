@@ -33,6 +33,14 @@ export interface BlenderOperationCallable {
       readonly context?: BlenderOperationCallContext;
     }
   ): Promise<OperationResult>;
+  /**
+   * Best-effort abort of an in-flight `runOperation`. The implementation
+   * tears down the underlying socket / SDK transport so the foreground
+   * promise rejects with an error whose message starts with `Blender call
+   * aborted`. Optional — runners that can't be aborted simply omit this and
+   * the executor falls back to letting the call run to completion.
+   */
+  abort?(reason?: string): void;
 }
 
 export interface BlenderStepExecutorOptions {
@@ -108,6 +116,14 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
     const operationCandidate = metadata["operation"];
     const pythonCandidate = metadata["python"];
 
+    // If the run was cancelled before we even started this step, fail fast
+    // so the orchestrator records a failed entry and short-circuits the rest
+    // of the pipeline. We surface a distinctive error message so log readers
+    // can tell aborted-before-start from aborted-mid-call.
+    if (context.signal?.aborted) {
+      throw new Error("Step aborted before execution");
+    }
+
     let validatedOperation: BlenderOperation | undefined;
     if (operationCandidate !== undefined) {
       if (!this.operationRunner) {
@@ -138,7 +154,7 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
     const onProgress = buildBlenderProgressHandler(context);
     const callContext = buildBlenderCallContext(context, metadata);
 
-    const runOp = async (): Promise<unknown> => {
+    const innerRunOp = async (): Promise<unknown> => {
       if (validatedOperation) {
         // operationRunner presence is guaranteed above when validatedOperation is set.
         const runOptions: {
@@ -177,6 +193,70 @@ export class BlenderStepExecutor implements PipelineStepExecutor {
       throw new Error(
         `Blender step "${context.step.id}" requires either metadata.operation (BlenderOperation) or metadata.python (string).`
       );
+    };
+
+    /**
+     * Wraps `innerRunOp` with the run's AbortSignal so the in-flight socket
+     * (or SDK) call rejects immediately when the run is cancelled — without
+     * this wrapper, a 5-minute render would block the orchestrator until the
+     * Blender process finished, even though the user already pressed cancel.
+     *
+     * On abort:
+     *   - Calls `runner.abort()` and `mcpClient.abort()` (whichever exist),
+     *     which destroys the underlying socket / SDK transport so the
+     *     foreground promise rejects with `Error("Blender call aborted ...")`.
+     *   - Listener removal happens via try/finally so a normal completion or
+     *     a non-abort exception both clean up correctly.
+     *   - Aborted-shaped rejections are re-thrown with a message that
+     *     `deriveRunStatus` can pair with the run-level cancelled state.
+     *
+     * SAFETY: this only stops the sidecar from waiting. The bpy script keeps
+     * running inside Blender until it finishes naturally — there is no safe
+     * way to interrupt `bpy.ops.render.render()` mid-execution from outside
+     * the Blender process without add-on changes that aren't in scope.
+     */
+    const runOp = async (): Promise<unknown> => {
+      const signal = context.signal;
+      const abortReason = `pipeline run cancelled (step ${context.step.id})`;
+      const triggerAbort = (): void => {
+        try {
+          this.operationRunner?.abort?.(abortReason);
+        } catch {
+          /* never let a misbehaving runner break the executor */
+        }
+        try {
+          this.mcpClient?.abort(abortReason);
+        } catch {
+          /* ditto */
+        }
+      };
+
+      // No signal -> no wiring; behave exactly like before.
+      if (!signal) {
+        return innerRunOp();
+      }
+      // Already aborted at entry -> trip the underlying clients (in case a
+      // prior call already drove them into a leaked state) and rethrow.
+      if (signal.aborted) {
+        triggerAbort();
+        throw new Error("Step aborted before execution");
+      }
+
+      const onAbort = (): void => triggerAbort();
+      signal.addEventListener("abort", onAbort);
+
+      try {
+        return await innerRunOp();
+      } catch (error) {
+        if (looksLikeBlenderAbortError(error) || signal.aborted) {
+          throw new Error(
+            `Step aborted: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+        throw error;
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
     };
 
     const runOpAndMaybeCheckpoint = async (): Promise<unknown> => {
@@ -469,6 +549,26 @@ function readApprovalTimeoutMs(): number {
     }
   }
   return DEFAULT_APPROVAL_TIMEOUT_MS;
+}
+
+/**
+ * Returns true when an error looks like the AbortError-shaped rejection the
+ * MCP client's `abort()` produces (or any DOMException-style abort). The check
+ * is intentionally permissive — false positives only mean we surface the error
+ * with a slightly nicer prefix; false negatives mean a real-but-not-tagged
+ * abort comes through as the underlying transport error, which is still
+ * acceptable.
+ */
+function looksLikeBlenderAbortError(error: unknown): boolean {
+  if (error instanceof Error) {
+    if (error.name === "AbortError") {
+      return true;
+    }
+    if (typeof error.message === "string" && error.message.startsWith("Blender call aborted")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
