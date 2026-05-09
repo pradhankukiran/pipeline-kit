@@ -11,9 +11,18 @@
  * Recipe IDs covered:
  *   - studio-set:white-sweep
  *   - studio-set:water_bottle_product_viz   (composite)
+ *   - studio-set:product_sweep              (composite, no material/preset)
+ *   - studio-set:pedestal                   (composite, sweep + cylinder)
  *   - lighting-rig:softbox-three-point
- *   - camera-rig:turntable-orbit
+ *   - camera-rig:turntable-orbit            (static / orbit / dolly / push_in)
  *   - material:matte-clay
+ *   - material:clear-plastic
+ *   - material:paper-label
+ *   - material:glossy-white
+ *   - material:brushed-metal
+ *   - material:glass
+ *   - prop:primitive-stand
+ *   - motion:slow-push-in
  *   - render-preset:preview-1080p
  */
 
@@ -180,6 +189,26 @@ export interface PedestalSetParams {
   readonly pedestalHeight?: number;
   /** Pedestal cylinder side count. Default 64. */
   readonly pedestalSides?: number;
+}
+
+export interface PrimitiveStandParams {
+  /** Stand height in metres. Default 0.8. */
+  readonly height?: number;
+  /** Stand radius in metres. Default 1.2. */
+  readonly radius?: number;
+  /** Cylinder side count. Default 64. */
+  readonly sides?: number;
+}
+
+export type SlowPushInEase = "linear" | "ease-in" | "ease-out" | "ease-in-out";
+
+export interface SlowPushInParams {
+  /** Distance the camera moves toward the subject, metres. Default 1.25. */
+  readonly distance?: number;
+  /** Animation duration in frames. Default 96. */
+  readonly durationFrames?: number;
+  /** Curve interpolation. Default "ease-in-out". */
+  readonly ease?: SlowPushInEase;
 }
 
 // ---------------------------------------------------------------------------
@@ -672,6 +701,111 @@ _pk_pedestal_obj.location = (0.0, 0.0, ${pyFloat(halfHeight)})
     emitWhiteSweep({ floorSize }),
     pedestalBody,
   ].join("\n");
+}
+
+/**
+ * Recipe `prop:primitive-stand`. Emits a cylindrical mesh
+ * `PK_primitive_stand` at the origin, sized via height/radius/sides. The
+ * stand sits with its base on z=0 so it can be placed directly on a sweep
+ * floor.
+ */
+export function emitPrimitiveStand(params: PrimitiveStandParams = {}): string {
+  const height = params.height ?? 0.8;
+  const radius = params.radius ?? 1.2;
+  const sides = params.sides ?? 64;
+  const halfHeight = height / 2;
+
+  return `# PipelineKit recipe: prop:primitive-stand
+_pk_remove_object("PK_primitive_stand")
+_pk_stand_mesh = bpy.data.meshes.new("PK_primitive_stand_mesh")
+_pk_stand_obj = bpy.data.objects.new("PK_primitive_stand", _pk_stand_mesh)
+_pk_link(_pk_stand_obj)
+import bmesh as _pk_bmesh_stand
+_pk_bm_stand = _pk_bmesh_stand.new()
+_pk_bmesh_stand.ops.create_cone(
+    _pk_bm_stand,
+    cap_ends=True,
+    cap_tris=False,
+    segments=${pyFloat(sides)},
+    radius1=${pyFloat(radius)},
+    radius2=${pyFloat(radius)},
+    depth=${pyFloat(height)},
+)
+_pk_bm_stand.to_mesh(_pk_stand_mesh)
+_pk_bm_stand.free()
+_pk_stand_obj.location = (0.0, 0.0, ${pyFloat(halfHeight)})
+`;
+}
+
+/**
+ * Recipe `motion:slow-push-in`. Emits a keyframe-based push-in animation on
+ * the existing `PK_camera`. The camera moves a fixed `distance` toward the
+ * world origin along its current viewing direction over `durationFrames`
+ * frames. The `ease` field maps to a Blender fcurve interpolation mode:
+ *
+ *   - "linear"      -> LINEAR interpolation
+ *   - "ease-in"     -> BEZIER with custom handles biasing the start
+ *   - "ease-out"    -> BEZIER with custom handles biasing the end
+ *   - "ease-in-out" -> BEZIER (Blender's default), giving the smooth
+ *                      symmetric ease-in-out curve.
+ *
+ * Requires `PK_camera` to already exist (run a camera-rig emitter first).
+ */
+export function emitSlowPushIn(params: SlowPushInParams = {}): string {
+  const distance = params.distance ?? 1.25;
+  const duration = params.durationFrames ?? 96;
+  const ease: SlowPushInEase = params.ease ?? "ease-in-out";
+
+  // Map ease -> fcurve interpolation mode. Blender exposes LINEAR, BEZIER,
+  // and CONSTANT as core kinds; ease-in/out are easing variants that we set
+  // via the keyframe `easing` field on a BEZIER curve.
+  const interpolation = ease === "linear" ? "LINEAR" : "BEZIER";
+  const easing =
+    ease === "ease-in" ? "EASE_IN" : ease === "ease-out" ? "EASE_OUT" : "EASE_IN_OUT";
+
+  return `# PipelineKit recipe: motion:slow-push-in
+_pk_push_camera = bpy.data.objects.get("PK_camera")
+if _pk_push_camera is None:
+    raise RuntimeError("motion:slow-push-in requires PK_camera (run a camera-rig recipe first)")
+
+import mathutils as _pk_mu_push
+_pk_push_distance = ${pyFloat(distance)}
+_pk_push_duration = int(${pyFloat(duration)})
+_pk_push_start_loc = _pk_push_camera.location.copy()
+# Move along the camera's local -Z axis (the lens forward direction) so the
+# motion is independent of the parent rotation rig.
+_pk_push_forward = _pk_push_camera.matrix_world.to_quaternion() @ _pk_mu_push.Vector((0.0, 0.0, -1.0))
+_pk_push_forward.normalize()
+_pk_push_end_loc = _pk_push_start_loc + _pk_push_forward * _pk_push_distance
+
+bpy.context.scene.frame_start = 1
+if bpy.context.scene.frame_end < _pk_push_duration:
+    bpy.context.scene.frame_end = _pk_push_duration
+
+# Clear any existing location keys on the camera so the push-in is the
+# active animation curve.
+if _pk_push_camera.animation_data and _pk_push_camera.animation_data.action:
+    _pk_push_action = _pk_push_camera.animation_data.action
+    for _pk_fc in [fc for fc in _pk_push_action.fcurves if fc.data_path == "location"]:
+        _pk_push_action.fcurves.remove(_pk_fc)
+
+_pk_push_camera.location = _pk_push_start_loc
+_pk_push_camera.keyframe_insert(data_path="location", frame=1)
+_pk_push_camera.location = _pk_push_end_loc
+_pk_push_camera.keyframe_insert(data_path="location", frame=_pk_push_duration)
+
+# Apply interpolation/easing to the freshly-created location fcurves.
+if _pk_push_camera.animation_data and _pk_push_camera.animation_data.action:
+    for _pk_fc in _pk_push_camera.animation_data.action.fcurves:
+        if _pk_fc.data_path != "location":
+            continue
+        for _pk_kp in _pk_fc.keyframe_points:
+            _pk_kp.interpolation = ${pyStr(interpolation)}
+            if _pk_kp.interpolation == "BEZIER":
+                _pk_kp.easing = ${pyStr(easing)}
+
+bpy.context.scene.frame_set(1)
+`;
 }
 
 /**

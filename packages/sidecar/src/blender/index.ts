@@ -15,3 +15,9 @@ export {
   createWaterBottleProductVizDemoOperations,
   type WaterBottleProductVizDemoOptions
 } from "./demo-operations.js";
+export { emitPrimitiveStand, emitSlowPushIn } from "./recipe-codegen.js";
+export type {
+  PrimitiveStandParams,
+  SlowPushInParams,
+  SlowPushInEase
+} from "./recipe-codegen.js";
