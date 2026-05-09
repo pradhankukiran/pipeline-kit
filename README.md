@@ -1,8 +1,5 @@
 <div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
-    <img src="docs/logo.svg" alt="PipelineKit" width="280">
-  </picture>
+  <img src="docs/logo.svg" alt="PipelineKit" width="280">
 
   <p><strong>AI-orchestrated Blender production pipelines.</strong></p>
   <p>Type a brief, get a real scene. Render product visualizations, lighting setups, and turntables with typed Blender operations driven by your choice of LLM.</p>
