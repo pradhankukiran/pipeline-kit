@@ -5,12 +5,19 @@ export interface ChatMessage {
   readonly content: string;
 }
 
+export interface ProviderImageInput {
+  readonly localPath?: string;
+  readonly url?: string;
+  readonly mediaType?: string;
+}
+
 export interface ModelRequest {
   readonly messages: readonly ChatMessage[];
   readonly model?: string;
   readonly temperature?: number;
   readonly responseFormat?: "text" | "json";
   readonly metadata?: Record<string, unknown>;
+  readonly images?: ReadonlyArray<ProviderImageInput>;
 }
 
 export interface ModelResponse {

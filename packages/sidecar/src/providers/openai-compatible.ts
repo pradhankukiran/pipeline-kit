@@ -1,4 +1,12 @@
-import type { ChatMessage, ModelProvider, ModelRequest, ModelResponse } from "./types.js";
+import { readFile } from "node:fs/promises";
+
+import type {
+  ChatMessage,
+  ModelProvider,
+  ModelRequest,
+  ModelResponse,
+  ProviderImageInput
+} from "./types.js";
 
 interface OpenAiCompatibleProviderOptions {
   readonly providerName: string;
@@ -44,6 +52,7 @@ export class OpenAiCompatibleProvider implements ModelProvider {
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const model = request.model ?? this.defaultModel;
     const url = `${this.baseUrl}/chat/completions`;
+    const messages = await buildRequestMessages(request);
     const init: RequestInit = {
       method: "POST",
       headers: {
@@ -53,7 +62,7 @@ export class OpenAiCompatibleProvider implements ModelProvider {
       },
       body: JSON.stringify({
         model,
-        messages: request.messages satisfies readonly ChatMessage[],
+        messages,
         temperature: request.temperature,
         response_format:
           request.responseFormat === "json" ? { type: "json_object" } : undefined
@@ -195,4 +204,116 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+interface OpenAiTextPart {
+  readonly type: "text";
+  readonly text: string;
+}
+
+interface OpenAiImagePart {
+  readonly type: "image_url";
+  readonly image_url: { readonly url: string };
+}
+
+type OpenAiContentPart = OpenAiTextPart | OpenAiImagePart;
+
+interface OpenAiMessage {
+  readonly role: ChatMessage["role"];
+  readonly content: string | readonly OpenAiContentPart[];
+}
+
+/**
+ * Builds the OpenAI-compatible `messages` array. Without `request.images`
+ * messages pass through unchanged (plain string content). With images, the
+ * LAST user-role message has its content rewritten into the multipart
+ * `[{type:"text"}, ...image_url parts]` shape so providers like OpenRouter
+ * can route to a vision-capable model. `localPath` images are read from disk
+ * and base64-embedded as a data URL; `url` images pass through verbatim.
+ */
+async function buildRequestMessages(request: ModelRequest): Promise<readonly OpenAiMessage[]> {
+  const baseMessages: OpenAiMessage[] = request.messages.map((message) => ({
+    role: message.role,
+    content: message.content
+  }));
+
+  const images = request.images;
+  if (!images || images.length === 0) {
+    return baseMessages;
+  }
+
+  const lastUserIndex = findLastIndex(baseMessages, (message) => message.role === "user");
+  if (lastUserIndex === -1) {
+    // No user message to attach images to — nothing to rewrite.
+    return baseMessages;
+  }
+
+  const targetMessage = baseMessages[lastUserIndex];
+  if (!targetMessage) {
+    return baseMessages;
+  }
+  const originalText =
+    typeof targetMessage.content === "string"
+      ? targetMessage.content
+      : extractText(targetMessage.content);
+
+  const imageParts = await Promise.all(images.map((image) => buildImagePart(image)));
+  const multipart: readonly OpenAiContentPart[] = [
+    { type: "text", text: originalText },
+    ...imageParts
+  ];
+
+  baseMessages[lastUserIndex] = {
+    role: targetMessage.role,
+    content: multipart
+  };
+
+  return baseMessages;
+}
+
+/**
+ * Local typing for Node's `Buffer` global. The repo's `node-shims.d.ts`
+ * declares a Uint8Array-shaped Buffer without the encoding-aware `toString`
+ * overloads we need here, so we narrow it locally rather than depending on
+ * `@types/node` (not a direct dep) or editing the server shim.
+ */
+interface NodeBufferLike {
+  from(input: Uint8Array): { toString(encoding: "base64"): string };
+}
+declare const Buffer: NodeBufferLike;
+
+async function buildImagePart(image: ProviderImageInput): Promise<OpenAiImagePart> {
+  if (typeof image.localPath === "string" && image.localPath.length > 0) {
+    const bytes = await readFile(image.localPath);
+    const mediaType =
+      typeof image.mediaType === "string" && image.mediaType.length > 0
+        ? image.mediaType
+        : "image/png";
+    const base64 = Buffer.from(bytes).toString("base64");
+    const dataUrl = `data:${mediaType};base64,${base64}`;
+    return { type: "image_url", image_url: { url: dataUrl } };
+  }
+  if (typeof image.url === "string" && image.url.length > 0) {
+    return { type: "image_url", image_url: { url: image.url } };
+  }
+  throw new Error("Image input must specify either localPath or url");
+}
+
+function extractText(parts: readonly OpenAiContentPart[]): string {
+  for (const part of parts) {
+    if (part.type === "text") {
+      return part.text;
+    }
+  }
+  return "";
+}
+
+function findLastIndex<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (item !== undefined && predicate(item)) {
+      return i;
+    }
+  }
+  return -1;
 }
