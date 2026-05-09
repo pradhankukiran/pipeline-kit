@@ -31,6 +31,8 @@ export interface SoftboxThreePointParams {
   readonly fillPower?: number;
   /** Watts. Default 400. */
   readonly rimPower?: number;
+  /** Color temperature in Kelvin. Default 5500 K. */
+  readonly colorTemperature?: number;
 }
 
 export interface TurntableOrbitParams {
@@ -255,12 +257,16 @@ export function emitSoftboxThreePoint(params: SoftboxThreePointParams = {}): str
   const key = params.keyPower ?? 800;
   const fill = params.fillPower ?? 600;
   const rim = params.rimPower ?? 400;
+  const kelvin = params.colorTemperature ?? 5500;
 
+  // The `kelvin_to_rgb` helper comes from `pythonPrelude` (operation-runner.ts).
   return `# PipelineKit recipe: lighting-rig:softbox-three-point
+_pk_light_color = kelvin_to_rgb(${pyFloat(kelvin)})
 def _pk_make_area_light(name, location, energy, size, rotation_euler=(0.0, 0.0, 0.0)):
     _pk_remove_object(name)
     light_data = bpy.data.lights.new(name=name + "_data", type="AREA")
     light_data.energy = energy
+    light_data.color = _pk_light_color
     if hasattr(light_data, "size"):
         light_data.size = size
     if hasattr(light_data, "shape"):

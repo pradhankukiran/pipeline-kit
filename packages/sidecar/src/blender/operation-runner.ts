@@ -191,7 +191,8 @@ function scriptForCreateLightingRig(operation: CreateLightingRigOperation): stri
   const recipeBody = emitSoftboxThreePoint({
     keyPower: watts.key * intensity,
     fillPower: watts.fill * intensity,
-    rimPower: watts.rim * intensity
+    rimPower: watts.rim * intensity,
+    colorTemperature: operation.params.colorTemperature ?? 5500
   });
 
   return wrapRecipeScript(
