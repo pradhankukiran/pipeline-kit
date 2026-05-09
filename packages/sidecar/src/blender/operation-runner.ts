@@ -174,12 +174,24 @@ print(json.dumps({"operation": operation["type"], "recipeId": ${JSON.stringify(r
 }
 
 function scriptForCreateLightingRig(operation: CreateLightingRigOperation): string {
-  // Scale recipe defaults by the operation's intensity multiplier.
+  // Each Zod preset defines its own (key, fill, rim) wattage trio. The
+  // operation's `intensity` is then a uniform multiplier on the final powers.
   const intensity = operation.params.intensity ?? 1;
+  const preset = operation.params.preset;
+
+  // Pre-multiplier ratios (key, fill, rim) per preset.
+  const presetWatts: Record<typeof preset, { key: number; fill: number; rim: number }> = {
+    studio_softbox: { key: 800, fill: 600, rim: 400 },
+    high_key_product: { key: 800, fill: 560, rim: 160 },
+    dramatic_rim: { key: 800, fill: 0, rim: 1200 },
+    three_point: { key: 800, fill: 400, rim: 560 }
+  };
+  const watts = presetWatts[preset];
+
   const recipeBody = emitSoftboxThreePoint({
-    keyPower: 800 * intensity,
-    fillPower: 600 * intensity,
-    rimPower: 400 * intensity
+    keyPower: watts.key * intensity,
+    fillPower: watts.fill * intensity,
+    rimPower: watts.rim * intensity
   });
 
   return wrapRecipeScript(
