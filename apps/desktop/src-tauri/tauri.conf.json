@@ -29,6 +29,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "PipelineKit",
+    "homepage": "https://github.com/pradhankukiran/pipeline-kit",
+    "copyright": "Copyright © 2026 Kiran Kumar Pradhan",
+    "shortDescription": "AI-orchestrated Blender production pipelines.",
+    "longDescription": "PipelineKit is a desktop app that orchestrates Blender via AI. It uses LLMs to plan, dispatch, and review production work — not to replace your creative tools, but to drive them with typed operations and a real scheduler. A pipeline run takes a prompt, plans a DAG, executes per-lane, and surfaces every step with live progress, approvals, and render previews.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
