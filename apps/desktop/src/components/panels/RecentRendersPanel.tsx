@@ -1,5 +1,11 @@
 import { useMemo, useState } from "react";
-import { Image as ImageIcon } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Image as ImageIcon,
+  Loader2,
+  MessageSquare
+} from "lucide-react";
 import {
   Card,
   CardContent,
@@ -14,10 +20,14 @@ import {
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { OperationRecord } from "@/fallbackData";
 import { inferOutputPath, renderUrlFromOutputPath } from "@/lib/renderUrl";
+import { submitRenderCritiquePipeline } from "@/sidecarApi";
+import { useDashboard } from "@/dashboard-context";
 
 const MAX_RENDERS = 12;
 
@@ -94,6 +104,12 @@ function EmptyState() {
   );
 }
 
+type CritiqueState =
+  | { kind: "idle" }
+  | { kind: "submitting" }
+  | { kind: "submitted"; runId: string }
+  | { kind: "error"; message: string };
+
 export function RecentRendersPanel({
   operations,
   loading = false,
@@ -102,6 +118,25 @@ export function RecentRendersPanel({
   const renders = useMemo(() => selectRenders(operations), [operations]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const active = activeIndex !== null ? renders[activeIndex] ?? null : null;
+  const { activeProjectId, setSubmitBanner } = useDashboard();
+  const [critique, setCritique] = useState<CritiqueState>({ kind: "idle" });
+
+  async function handleCritique(localPath: string) {
+    setCritique({ kind: "submitting" });
+    try {
+      const result = await submitRenderCritiquePipeline({
+        localPath,
+        projectId: activeProjectId
+      });
+      setCritique({ kind: "submitted", runId: result.runId });
+      setSubmitBanner(
+        `Submitted OpenRouter critique · run ${result.runId.slice(0, 8)}`
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Critique failed";
+      setCritique({ kind: "error", message });
+    }
+  }
 
   return (
     <Card id="recent-renders" className={cn("flex flex-col", className)}>
@@ -155,6 +190,7 @@ export function RecentRendersPanel({
         onOpenChange={(open) => {
           if (!open) {
             setActiveIndex(null);
+            setCritique({ kind: "idle" });
           }
         }}
       >
@@ -168,11 +204,49 @@ export function RecentRendersPanel({
             </DialogDescription>
           </DialogHeader>
           {active ? (
-            <img
-              src={active.thumbUrl}
-              alt={`Render output ${active.opId}`}
-              className="max-h-[70vh] w-full rounded-md border border-border bg-secondary object-contain"
-            />
+            <>
+              <img
+                src={active.thumbUrl}
+                alt={`Render output ${active.opId}`}
+                className="max-h-[70vh] w-full rounded-md border border-border bg-secondary object-contain"
+              />
+              <div className="flex flex-wrap items-center gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={critique.kind === "submitting"}
+                  onClick={() => void handleCritique(active.outputPath)}
+                >
+                  {critique.kind === "submitting" ? (
+                    <>
+                      <Loader2 className="animate-spin" />
+                      Submitting…
+                    </>
+                  ) : (
+                    <>
+                      <MessageSquare />
+                      Send to OpenRouter for critique
+                    </>
+                  )}
+                </Button>
+                {critique.kind === "submitted" ? (
+                  <Badge variant="success" className="gap-1">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Run {critique.runId.slice(0, 8)} submitted
+                  </Badge>
+                ) : null}
+                {critique.kind === "error" ? (
+                  <Badge
+                    variant="destructive"
+                    className="gap-1 max-w-[40ch] truncate"
+                  >
+                    <AlertCircle className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{critique.message}</span>
+                  </Badge>
+                ) : null}
+              </div>
+            </>
           ) : null}
         </DialogContent>
       </Dialog>

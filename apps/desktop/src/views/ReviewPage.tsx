@@ -14,6 +14,7 @@ export function ReviewPage() {
       <ReviewPanel
         activeProjectId={ctx.activeProjectId}
         refreshTick={ctx.approvalsRefreshTick}
+        recentOperations={ctx.operations}
       />
     </div>
   );

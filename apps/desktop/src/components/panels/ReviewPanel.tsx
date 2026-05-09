@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Ban,
@@ -36,6 +36,8 @@ import {
   listApprovals,
   type ApprovalRecord
 } from "@/sidecarApi";
+import type { OperationRecord } from "@/fallbackData";
+import { inferOutputPath, renderUrlFromOutputPath } from "@/lib/renderUrl";
 
 export type ApprovalStatusFilter = "pending" | "approved" | "rejected" | "all";
 
@@ -43,6 +45,12 @@ export interface ReviewPanelProps {
   activeProjectId: string | null;
   refreshTick?: number;
   className?: string;
+  /**
+   * Recent typed-op records used to find render thumbnails associated with
+   * an approval (currently a best-effort match — by stepId or fallback to
+   * the most recent render for a `review` payload).
+   */
+  recentOperations?: OperationRecord[];
 }
 
 const TABS: { id: ApprovalStatusFilter; label: string }[] = [
@@ -166,13 +174,49 @@ function PayloadDetails({ payload }: { payload: unknown }) {
   );
 }
 
+function findRenderThumbnailForApproval(
+  approval: ApprovalRecord,
+  operations: ReadonlyArray<OperationRecord>
+): { url: string; outputPath: string } | null {
+  const record = asRecord(approval.payload);
+  const kind = record && typeof record.kind === "string" ? record.kind : null;
+  if (kind !== "review") {
+    return null;
+  }
+
+  // Best-effort matching: if the review payload references a stepId, look
+  // for an op with the same id; otherwise fall back to the most recent op
+  // that resolves to a render URL. This is intentionally lightweight —
+  // the sidecar may not always link approvals back to render ops.
+  const stepId =
+    record && typeof record.stepId === "string" ? record.stepId : null;
+  const candidates = operations.slice();
+  const matched = stepId
+    ? candidates.find((op) => op.id === stepId || op.title.includes(stepId))
+    : null;
+  const ordered = matched
+    ? [matched, ...candidates.filter((op) => op !== matched)]
+    : candidates;
+
+  for (const op of ordered) {
+    const outputPath = inferOutputPath(op);
+    if (!outputPath) continue;
+    const url = renderUrlFromOutputPath(outputPath);
+    if (!url) continue;
+    return { url, outputPath };
+  }
+  return null;
+}
+
 function ApprovalRow({
   approval,
   busy,
+  thumbnail,
   onDecide
 }: {
   approval: ApprovalRecord;
   busy: boolean;
+  thumbnail: { url: string; outputPath: string } | null;
   onDecide: (status: "approved" | "rejected") => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -232,6 +276,29 @@ function ApprovalRow({
         </div>
       ) : null}
 
+      {thumbnail ? (
+        <div className="flex items-start gap-3 rounded-md border border-border bg-muted/30 p-2">
+          <img
+            src={thumbnail.url}
+            alt={`Render for ${approval.id}`}
+            loading="lazy"
+            decoding="async"
+            className="h-20 w-20 shrink-0 rounded-md border border-border bg-secondary object-cover"
+            onError={(event) => {
+              event.currentTarget.style.display = "none";
+            }}
+          />
+          <div className="min-w-0 flex-1 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">
+              Associated render
+            </p>
+            <code className="block break-all font-mono text-[11px] text-muted-foreground">
+              {thumbnail.outputPath}
+            </code>
+          </div>
+        </div>
+      ) : null}
+
       {hasPayload ? (
         <Collapsible open={open} onOpenChange={setOpen}>
           <CollapsibleTrigger asChild>
@@ -283,13 +350,18 @@ function emptyStateCopy(scope: ApprovalStatusFilter): {
 export function ReviewPanel({
   activeProjectId,
   refreshTick = 0,
-  className
+  className,
+  recentOperations
 }: ReviewPanelProps) {
   const [status, setStatus] = useState<ApprovalStatusFilter>("pending");
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const operations = useMemo(
+    () => recentOperations ?? [],
+    [recentOperations]
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -411,6 +483,10 @@ export function ReviewPanel({
                     key={approval.id}
                     approval={approval}
                     busy={pendingId === approval.id}
+                    thumbnail={findRenderThumbnailForApproval(
+                      approval,
+                      operations
+                    )}
                     onDecide={(decision) =>
                       void handleDecide(approval.id, decision)
                     }

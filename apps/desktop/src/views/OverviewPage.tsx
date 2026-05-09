@@ -186,6 +186,7 @@ export function OverviewPage() {
         <ReviewPanel
           activeProjectId={activeProjectId}
           refreshTick={approvalsRefreshTick}
+          recentOperations={operations}
           className="mb-6 break-inside-avoid"
         />
 

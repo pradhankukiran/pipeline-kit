@@ -1205,6 +1205,49 @@ export async function runSamplePlanner(): Promise<SidecarActionResult> {
 }
 
 // ---------------------------------------------------------------------------
+// One-shot OpenRouter critique (vision review)
+// ---------------------------------------------------------------------------
+
+/**
+ * Submits a one-shot pipeline run that asks OpenRouter to critique a single
+ * render. The render is attached via `step.metadata.images: [{ localPath }]`,
+ * which the model-step executor projects onto provider image inputs.
+ *
+ * Returns the new runId so the caller can surface it (e.g. in a banner).
+ */
+export async function submitRenderCritiquePipeline(input: {
+  localPath: string;
+  projectId?: string | null;
+  instruction?: string;
+}): Promise<PipelineRunSubmitResponse> {
+  const stepId = `critique-${Date.now()}`;
+  const definition: PipelineDefinitionPayload = {
+    id: `render-critique-${Date.now()}`,
+    input: {
+      prompt:
+        "Critique the attached render: comment on framing, lighting, materials, and overall quality. Suggest concrete improvements."
+    },
+    steps: [
+      {
+        id: stepId,
+        lane: "openrouter",
+        instruction:
+          input.instruction ??
+          "Review the attached render and produce a concise critique with prioritised suggestions.",
+        metadata: {
+          images: [{ localPath: input.localPath }]
+        }
+      }
+    ]
+  };
+
+  return runPipelineAsync(
+    definition,
+    input.projectId ? { projectId: input.projectId } : undefined
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Async pipeline submission (POST /pipeline/runs)
 // ---------------------------------------------------------------------------
 
