@@ -433,6 +433,21 @@ export async function createSidecarDevServer(): Promise<SidecarDevServerHandle> 
         return;
       }
 
+      if (pipelineRunIdMatch && request.method === "DELETE") {
+        const runId = decodeURIComponent(pipelineRunIdMatch[1]);
+        const outcome = orchestratorService.cancelRun(runId);
+        if (outcome === "not-found") {
+          writeJson(response, 404, { error: "Run not found" });
+          return;
+        }
+        if (outcome === "already-terminal") {
+          writeJson(response, 409, { error: "Run already terminal" });
+          return;
+        }
+        writeJson(response, 200, { status: "cancelled" });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/events") {
         const runIdFilter = url.searchParams.get("runId");
         const filter = createRunIdFilter(runIdFilter);
